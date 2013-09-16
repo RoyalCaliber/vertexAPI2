@@ -1,14 +1,14 @@
 NVCC = nvcc
-
-NVCC_OPTS = -O3 --restrict -Xptxas -dlcm=cg
+MGPU_PATH = ../../moderngpu
+NVCC_OPTS = -O3 --restrict -Xptxas -dlcm=cg -I$(MGPU_PATH)/include -L$(MGPU_PATH)
 NVCC_ARCHS = -gencode arch=compute_20,code=sm_20
-LD_LIBS = -lz
+LD_LIBS = -lz -lmgpu
 
 
 #The rules need to be cleaned up, but we're probably going to use cmake, so
 #just hacking it for now.
 
-HEADERS = graphio.h util.h refgas.h
+HEADERS = graphio.h util.h refgas.h gpugas.h gpugas_kernels.cuh
 
 BINARIES = pagerank sssp bfs
 
@@ -24,19 +24,19 @@ pagerank.o: pagerank.cu $(HEADERS) Makefile
 	nvcc -c -o $@ $< $(NVCC_OPTS) $(NVCC_ARCHS) 
 
 pagerank: pagerank.o graphio.o util.o
-	nvcc -o $@ $^ $(LD_LIBS)
+	nvcc $(NVCC_OPTS) $(NVCC_ARCHS) -o $@ $^ $(LD_LIBS)
 
 sssp.o: sssp.cu $(HEADERS) Makefile
 	nvcc -c -o $@ $< $(NVCC_OPTS) $(NVCC_ARCHS) 
 
 sssp: sssp.o graphio.o util.o
-	nvcc -o $@ $^ $(LD_LIBS)
+	nvcc $(NVCC_OPTS) $(NVCC_ARCHS) -o $@ $^ $(LD_LIBS)
 
 bfs.o: bfs.cu $(HEADERS) Makefile
 	nvcc -c -o $@ $< $(NVCC_OPTS) $(NVCC_ARCHS) 
 
 bfs: bfs.o graphio.o util.o
-	nvcc -o $@ $^ $(LD_LIBS)
+	nvcc $(NVCC_OPTS) $(NVCC_ARCHS) -o $@ $^ $(LD_LIBS)
 
 clean:
 	rm -f $(BINARIES) *.o

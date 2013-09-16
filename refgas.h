@@ -20,8 +20,6 @@ class GASEngineRef
   Int         m_nEdges;
   VertexData *m_vertexData;
   EdgeData   *m_edgeData;
-  const Int  *m_edgeListSrcs; 
-  const Int  *m_edgeListDsts;
 
   //CSC representation for gather phase
   std::vector<Int> m_srcs;
@@ -40,9 +38,10 @@ class GASEngineRef
     GASEngineRef()
       : m_nVertices(0)
       , m_nEdges(0)
-      , m_edgeListSrcs(0)
-      , m_edgeListDsts(0)
     {}
+
+
+    ~GASEngineRef(){}
 
   
     //initialize the graph data structures for the GPU
@@ -61,22 +60,20 @@ class GASEngineRef
       , VertexData* vertexData
       , Int nEdges
       , EdgeData* edgeData
-      , Int *src
-      , Int *dst)
+      , const Int *edgeListSrcs
+      , const Int *edgeListDsts)
     {
       m_nVertices  = nVertices;
       m_nEdges     = nEdges;
       m_vertexData = vertexData;
       m_edgeData   = edgeData;
-      m_edgeListSrcs = src;
-      m_edgeListDsts = dst;
 
       //get CSC representation for gather/apply
       m_srcOffsets.resize(m_nVertices + 1);
       m_srcs.resize(m_nEdges);
       m_edgeIndexCSC.resize(m_nEdges);
       edgeListToCSC(m_nVertices, m_nEdges
-        , m_edgeListSrcs, m_edgeListDsts
+        , edgeListSrcs, edgeListDsts
         , &m_srcOffsets[0], &m_srcs[0], &m_edgeIndexCSC[0]);
 
       //get CSR representation for activate/scatter
@@ -84,7 +81,7 @@ class GASEngineRef
       m_dsts.resize(m_nEdges);
       m_edgeIndexCSR.resize(m_nEdges);
       edgeListToCSR(m_nVertices, m_nEdges
-        , m_edgeListSrcs, m_edgeListDsts
+        , edgeListSrcs, edgeListDsts
         , &m_dstOffsets[0], &m_dsts[0], &m_edgeIndexCSR[0]);
     }
 
@@ -101,7 +98,7 @@ class GASEngineRef
 
     //set the active flag for a range [vertexStart, vertexEnd)
     //affects only the next gather step
-    void setActive(Int vertexStart, Int vertexEnd, bool value)
+    void setActive(Int vertexStart, Int vertexEnd)
     {
       for( Int i = vertexStart; i < vertexEnd; ++i )
         m_activeNextStep[i] = true;
@@ -163,12 +160,6 @@ class GASEngineRef
           }
         }
       }
-    }
-
-
-    void apply()
-    {
-      gatherApply(false);
     }
 
 

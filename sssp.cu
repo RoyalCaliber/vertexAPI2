@@ -74,7 +74,7 @@ int main(int argc, char** argv)
 
   GASEngineRef<SSSP> engine;
   engine.setGraph(nVertices, &vertexData[0], srcs.size(), 0, &srcs[0], &dsts[0]);
-  engine.setActive(sourceVertex, sourceVertex+1, true);
+  engine.setActive(sourceVertex, sourceVertex+1);
   engine.run();
   engine.getResults();
 

@@ -79,12 +79,12 @@ int main(int argc, char** argv)
 
   GASEngineRef<BFS> engine;
   engine.setGraph(nVertices, &vertexData[0], srcs.size(), 0, &srcs[0], &dsts[0]);
-  engine.setActive(sourceVertex, sourceVertex+1, true);
+  engine.setActive(sourceVertex, sourceVertex+1);
   BFS::iterationCount = 0;
   while( engine.countActiveNext() )
   {
-    //no gather
-    engine.apply();
+    //run apply without gather
+    engine.gatherApply(false);
     //no scatter
     ++BFS::iterationCount;
   }
