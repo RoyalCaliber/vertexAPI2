@@ -57,6 +57,7 @@ struct BFS
 
 
 int BFS::iterationCount;
+int BFS::gatherZero;
 
 
 int main(int argc, char** argv)
@@ -72,6 +73,8 @@ int main(int argc, char** argv)
   std::vector<int> dsts;
   loadGraph(inputFilename, nVertices, srcs, dsts);
 
+  BFS::gatherZero = nVertices + 1;
+
   //initialize vertex data
   std::vector<BFS::VertexData> vertexData;
   for( int i = 0; i < nVertices; ++i )
@@ -81,7 +84,7 @@ int main(int argc, char** argv)
   engine.setGraph(nVertices, &vertexData[0], srcs.size(), 0, &srcs[0], &dsts[0]);
   engine.setActive(sourceVertex, sourceVertex+1);
   BFS::iterationCount = 0;
-  while( engine.countActiveNext() )
+  while( engine.nextIter() )
   {
     //run apply without gather
     engine.gatherApply(false);

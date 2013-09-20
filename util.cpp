@@ -15,21 +15,29 @@ int64_t currentTime()
 
 int parseCmdLineSimple(int argc, char** argv, const char* fmt, ...)
 {
+  int nArgs = strlen(fmt);
+  if( argc != 1 + nArgs )
+  {
+    printf("parseCmdLineSimple: expected %d arguments, got %d\n", nArgs, argc);
+    exit(1);
+  }
+      
   va_list args;
   va_start(args, fmt);
   int iArg = 1;
-  for( char f = *fmt; f; ++f )
+  for( const char *f = fmt; *f; ++f )
   {
-    switch( f )
+    switch( *f )
     {
       case 's': *(va_arg(args, char**)) = strdup(argv[iArg]); break;
       default:
-        printf("parseCmdLineSimple: bad format character '%c'\n", f);
+        printf("parseCmdLineSimple: bad format character '%c'\n", *f);
         exit(1);
     }
     ++iArg;
   }
   va_end(args);
+  return 1;
 }
 
 

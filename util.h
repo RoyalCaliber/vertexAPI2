@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <vector>
 #include <algorithm>
+#include <stdio.h>
 
 //some simple utility routines to avoid duplication across test programs
 
@@ -56,23 +57,32 @@ void edgeListToCSR(Int nVertices, Int nEdges
   , const Int *srcs, const Int *dsts
   , Int *offsets, Int *outDsts, Int* sortIndices)
 {
-  Int* ind = sortIndices;
+  Int* ind;
+  std::vector<Int> tmpIndices;
+  if( sortIndices )
+    ind = sortIndices;
+  else
+  {
+    tmpIndices.resize(nEdges);
+    ind = &tmpIndices[0];
+  }
   indSort(nEdges, srcs, ind);
-  for( Int i = 0; i < nEdges; ++i )
-    outDsts[i] = dsts[ ind[i] ];
-  Int count = 0;
-  Int prev  = -1;
+
+  if( outDsts )
+  {
+    for( Int i = 0; i < nEdges; ++i )
+      outDsts[i] = dsts[ ind[i] ];
+  }
+
+  Int curSrc = 0;
   for( Int i = 0; i < nEdges; ++i )
   {
-    if( srcs[ ind[i] ] != prev )
-    {
-      prev = srcs[ ind[i] ];
-      offsets[ count ] = i;
-      ++count;
-    }
+    Int src = srcs[ind[i]];
+    while( curSrc <= src )
+      offsets[curSrc++] = i;
   }
-  //sentinel
-  offsets[nVertices] = nEdges;
+  while(curSrc <= nVertices)
+    offsets[curSrc++] = nEdges;
 }
 
 

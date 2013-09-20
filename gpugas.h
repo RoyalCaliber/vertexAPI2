@@ -132,13 +132,25 @@ class GASEngineGPU
   dim3 calcGridDim(Int n)
   {
     uint64_t tmp = n;
-    return dim3(tmp & 0xffff, 1 + (tmp & 0xffff0000l)>>16, 1 + (tmp & 0xffff00000000l) >> 32);
+    return dim3(tmp & 0xffff, 1 + ((tmp & 0xffff0000l)>>16)
+      , 1 + ((tmp & 0xffff00000000l) >> 32));
   }
 
 
   Int divRoundUp(Int x, Int y)
   {
     return (x + y - 1) / y;
+  }
+
+
+  //for debugging
+  template<typename T>
+  void printGPUArray(T* ptr, int n)
+  {
+    std::vector<T> tmp(n);
+    copyToHost(&tmp[0], ptr, n);
+    for( Int i = 0; i < n; ++i )
+      std::cout << i << " " << tmp[i] << std::endl;
   }
   
   public:
@@ -161,6 +173,9 @@ class GASEngineGPU
       , m_nActiveNext(0)
       , m_applyRet(0)
       , m_edgeCountScan(0)
+      , m_gatherMapTmp(0)
+      , m_gatherTmp(0)
+      , m_gatherDstsTmp(0)
       , m_reduceByKeyTmp(0)
     {
       m_mgpuContext = mgpu::CreateCudaDevice(0);
@@ -179,10 +194,12 @@ class GASEngineGPU
       gpuFree(m_edgeIndexCSR);
       gpuFree(m_active);
       gpuFree(m_activeNext);
+      gpuFree(m_applyRet);
+      gpuFree(m_edgeCountScan);
       gpuFree(m_gatherMapTmp);
+      gpuFree(m_gatherTmp);
       gpuFree(m_gatherDstsTmp);
       gpuFree(m_reduceByKeyTmp);
-      gpuFree(m_applyRet);
       //don't we need to explicitly clean up m_mgpuContext?
     }
 
@@ -262,12 +279,13 @@ class GASEngineGPU
       //allocate active lists
       gpuAlloc(m_active, m_nVertices);
       gpuAlloc(m_activeNext, m_nVertices);
-      gpuAlloc(m_applyRet, m_nVertices);
 
       //allocate temporaries for current multi-part gather kernels
-      gpuAlloc(m_gatherMapTmp, m_nEdges);
-      gpuAlloc(m_gatherDstsTmp, m_nEdges);
+      gpuAlloc(m_applyRet, m_nVertices);
       gpuAlloc(m_edgeCountScan, m_nVertices);
+      gpuAlloc(m_gatherMapTmp, m_nEdges);
+      gpuAlloc(m_gatherTmp, m_nVertices);
+      gpuAlloc(m_gatherDstsTmp, m_nEdges);
       gpuAlloc(m_reduceByKeyTmp, m_nVertices);
     }
 
@@ -286,21 +304,21 @@ class GASEngineGPU
 
 
     //set the active flag for a range [vertexStart, vertexEnd)
-    //affects only the next gather step
     void setActive(Int vertexStart, Int vertexEnd)
     {
-      m_nActiveNext = vertexEnd - vertexStart;
+      m_nActive = vertexEnd - vertexStart;
       const int nThreadsPerBlock = 128;
-      const int nBlocks = divRoundUp(m_nActiveNext, nThreadsPerBlock);
+      const int nBlocks = divRoundUp(m_nActive, nThreadsPerBlock);
       dim3 grid = calcGridDim(nBlocks);
-      GPUGASKernels::kRange<<<grid, nThreadsPerBlock>>>(vertexStart, vertexEnd, 1, m_active);
+      GPUGASKernels::kRange<<<grid, nThreadsPerBlock>>>(vertexStart, vertexEnd, m_active);
+      cudaThreadSynchronize();
     }
 
 
     //Return the number of active vertices in the next gather step
-    Int countActiveNext()
+    Int countActive()
     {
-      return m_nActiveNext;
+      return m_nActive;
     }
 
 
@@ -320,8 +338,9 @@ class GASEngineGPU
 
       MGPU_HOST_DEVICE value_type Extract(input_type vert, int index)
       {
-        //we should probably just store this difference?
-        return m_offsets[vert + 1] - m_offsets[vert];
+        //This seems to get called even when out of range, so we have
+        //to do an explicit check here.
+        return index >= 0 ? m_offsets[vert + 1] - m_offsets[vert] : 0;
       }
 
       MGPU_HOST_DEVICE value_type Plus(value_type t1, value_type t2)
@@ -340,6 +359,27 @@ class GASEngineGPU
       }
 
       EdgeCountScanOp(const Int* offsets) : m_offsets(offsets) {}
+    };
+
+    //this one checks if predicate is false and outputs zero if so
+    //used in the current impl for scatter, this will go away.
+    struct PredicatedEdgeCountScanOp : public EdgeCountScanOp
+    {
+      using EdgeCountScanOp::m_offsets;
+      const Int* m_predicates;
+
+      typedef typename EdgeCountScanOp::input_type input_type;
+      typedef typename EdgeCountScanOp::value_type value_type;
+      
+      MGPU_HOST_DEVICE value_type Extract(input_type vert, int index)
+      {
+        return (index >= 0 && m_predicates[vert]) ? m_offsets[vert + 1] - m_offsets[vert] : 0;
+      }
+
+      PredicatedEdgeCountScanOp(const Int* offsets, const Int* predicates)
+        : EdgeCountScanOp(offsets)
+        , m_predicates(predicates)
+      {}
     };
 
 
@@ -388,7 +428,7 @@ class GASEngineGPU
         , m_edgeData
         , m_gatherDstsTmp
         , m_gatherMapTmp );
-
+      
       //using thrust reduce_by_key because CUB version not complete (doesn't compile)
       //anyway, this will all be rolled into a single kernel as this develops
       thrust::reduce_by_key(thrust::device_pointer_cast(m_gatherDstsTmp)
@@ -399,6 +439,7 @@ class GASEngineGPU
         , thrust::equal_to<Int>()
         , ThrustReduceWrapper());
 
+
       //Now run the apply kernel
       {
         const int nThreadsPerBlock = 128;
@@ -407,15 +448,34 @@ class GASEngineGPU
         GPUGASKernels::kApply<Program, Int><<<grid, nThreadsPerBlock>>>
           (m_nActive, m_active, m_gatherTmp, m_vertexData, m_applyRet);
       }
-      
     }
 
 
-    //do the scatter operation
-    //wrote this similar to how we might do it on the GPU to help debugging
-    //on the CPU there is no need to use the CSR ordering at all.
+    //not writing a custom kernel for this until we get kGather right, since
+    //many ideas are shared between the two.  Here we just use IntervalMove as
+    //a canned routine to produce a compact list of dsts 
     void scatter()
     {
+      //counts = m_applyRet ? outEdgeCount[ m_active ] : 0
+      //first scan the numbers of edges from the active list
+      PredicatedEdgeCountScanOp ecScanOp(m_dstOffsets, m_applyRet);
+      Int nActiveEdges;
+      mgpu::Scan<mgpu::MgpuScanTypeExc, Int*, Int*, PredicatedEdgeCountScanOp>(m_active
+        , m_nActive
+        , m_edgeCountScan
+        , ecScanOp
+        , &nActiveEdges
+        , false
+        , *m_mgpuContext);
+
+      printGPUArray(m_edgeCountScan, m_nActive);
+      exit(1);
+    }
+
+
+    Int nextIter()
+    {
+      return 0;
     }
 
 
@@ -424,15 +484,14 @@ class GASEngineGPU
     //easily roll their own loop.
     void run()
     {
-      while( countActiveNext() )
+      while( countActive() )
       {
         gatherApply();
 
         //can skip scatter if the algorithm has no edge data.
-        if( m_edgeData )
-          scatter();
+        scatter();
+        nextIter();
       }
-      getResults();
     }
 };  
 

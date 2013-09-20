@@ -54,6 +54,15 @@ struct PageRank
 };
 
 
+void outputRanks(int n, const PageRank::VertexData* vertexData)
+{
+  for( int i = 0; i < n; ++i )
+  {
+    printf("%d %f\n", i, vertexData[i].rank);
+  }
+}
+
+
 int main(int argc, char **argv)
 {
   char* inputFilename;
@@ -65,33 +74,44 @@ int main(int argc, char **argv)
   std::vector<int> srcs;
   std::vector<int> dsts;
   loadGraph(inputFilename, nVertices, srcs, dsts);
+  printf("loaded %s with %d vertices and %zd edges\n", inputFilename, nVertices, srcs.size());
 
   //initialize vertex data
+  //convert to CSR to get the count of edges.
+  std::vector<int> srcOffsets(nVertices + 1);
+  std::vector<int> csrSrcs(srcs.size());
+  edgeListToCSR<int>(nVertices, srcs.size(), &srcs[0], &dsts[0], &srcOffsets[0], 0, 0);
+  
   std::vector<PageRank::VertexData> vertexData(nVertices);
   for( int i = 0; i < nVertices; ++i )
-    vertexData[i].rank = PageRank::pageConst;
-
+    vertexData[i].numOutEdges = srcOffsets[i + 1] - srcOffsets[i];
+    
   //instantiate and run the engine to completion
   {
+    for( int i = 0; i < nVertices; ++i )
+      vertexData[i].rank = PageRank::pageConst;
+
     GASEngineRef<PageRank> engine;
     engine.setGraph(nVertices, &vertexData[0], srcs.size(), 0, &srcs[0], &dsts[0]);
     //all vertices begin active for pagerank
     engine.setActive(0, nVertices);
     engine.run();
     engine.getResults();
-
-    //output ranks.
+    printf("Reference:\n");
+    outputRanks(nVertices, &vertexData[0]);
   }
 
   {
     //Repeat the calculation with the GPU engine
+    for( int i = 0; i < nVertices; ++i )
+      vertexData[i].rank = PageRank::pageConst;
     GASEngineGPU<PageRank> engine;
     engine.setGraph(nVertices, &vertexData[0], srcs.size(), 0, &srcs[0], &dsts[0]);
     engine.setActive(0, nVertices);
     engine.run();
     engine.getResults();
-
-    //output ranks
+    printf("GPU:\n");
+    outputRanks(nVertices, &vertexData[0]);
   }
 }
 

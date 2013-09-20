@@ -2,6 +2,7 @@
 #define REFGAS_H__
 
 #include <vector>
+#include <stdio.h>
 
 //Reference implementation, useful for correctness checking
 //and prototyping interfaces.
@@ -31,8 +32,10 @@ class GASEngineRef
   std::vector<Int> m_dstOffsets;
   std::vector<Int> m_edgeIndexCSR;
 
-  std::vector<bool> m_active;
-  std::vector<bool> m_activeNextStep;
+  //doing similar to the GPU for ease of comparison
+  std::vector<Int>  m_active;
+  std::vector<Int>  m_applyRet;
+  std::vector<bool> m_activeFlags;
 
   public:
     GASEngineRef()
@@ -68,6 +71,14 @@ class GASEngineRef
       m_vertexData = vertexData;
       m_edgeData   = edgeData;
 
+      //get CSR representation for activate/scatter
+      m_dstOffsets.resize(m_nVertices + 1);
+      m_dsts.resize(m_nEdges);
+      m_edgeIndexCSR.resize(m_nEdges);
+      edgeListToCSR(m_nVertices, m_nEdges
+        , edgeListSrcs, edgeListDsts
+        , &m_dstOffsets[0], &m_dsts[0], &m_edgeIndexCSR[0]);
+
       //get CSC representation for gather/apply
       m_srcOffsets.resize(m_nVertices + 1);
       m_srcs.resize(m_nEdges);
@@ -76,13 +87,9 @@ class GASEngineRef
         , edgeListSrcs, edgeListDsts
         , &m_srcOffsets[0], &m_srcs[0], &m_edgeIndexCSC[0]);
 
-      //get CSR representation for activate/scatter
-      m_dstOffsets.resize(m_nVertices + 1);
-      m_dsts.resize(m_nEdges);
-      m_edgeIndexCSR.resize(m_nEdges);
-      edgeListToCSR(m_nVertices, m_nEdges
-        , edgeListSrcs, edgeListDsts
-        , &m_dstOffsets[0], &m_dsts[0], &m_edgeIndexCSR[0]);
+      m_active.reserve(m_nVertices);
+      m_applyRet.resize(m_nVertices);
+      m_activeFlags.resize(m_nVertices, false);
     }
 
 
@@ -100,107 +107,89 @@ class GASEngineRef
     //affects only the next gather step
     void setActive(Int vertexStart, Int vertexEnd)
     {
+      m_active.clear();
       for( Int i = vertexStart; i < vertexEnd; ++i )
-        m_activeNextStep[i] = true;
+        m_active.push_back(i);
     }
 
 
     //Return the number of active vertices in the next gather step
-    Int countActiveNext()
+    Int countActive()
     {
-      Int count = 0;
-      for( Int i = 0; i < m_nVertices; ++i )
-        count += m_activeNextStep[i];
-      return count;
+      return m_active.size();
     }
 
 
     void gatherApply(bool haveGather=true)
     {
-      //initialize active flags.
-      m_active.swap(m_activeNextStep);
-      m_activeNextStep.clear();
-      m_activeNextStep.resize(m_nVertices, false);
-      
-      for( Int dv = 0; dv < m_nVertices; ++dv )
+      for( Int i = 0; i < m_active.size(); ++i )
       {
-        if( m_active[dv] )
+        Int dv = m_active[i];
+        GatherResult sum = Program::gatherZero;
+        Int edgeStart = m_srcOffsets[dv];
+        Int edgeEnd   = m_srcOffsets[dv + 1];
+        for( Int ie = edgeStart; ie < edgeEnd; ++ie )
         {
-          GatherResult sum = Program::gatherZero;
-          const VertexData *dstVert = m_vertexData ? m_vertexData + dv : 0;
-
-          if( haveGather )
-          {
-            Int edgeStart = m_srcOffsets[dv];
-            Int edgeEnd   = m_srcOffsets[dv + 1];
-          
-            //do gather map-reduce
-            for( Int ie = edgeStart; ie < edgeEnd; ++ie )
-            {
-              const VertexData *srcVert = m_vertexData ? m_vertexData + m_srcs[ie] : 0;
-              const EdgeData *edgeData = m_edgeData ? m_edgeData + m_edgeIndexCSC[ie] : 0;
-              sum = Program::gatherReduce(sum, Program::gatherMap(dstVert, srcVert, edgeData));
-            }
-          }
-
-          //do apply
-          bool ret = Program::apply( const_cast<VertexData*>(dstVert), sum );
-
-          //if the return value is true, we activate all the neighbors
-          //for the next step.  Doing it here instead of in scatter to force the
-          //Program to choose between activating all neighbors and no neighbors
-          //which may be faster on a GPU.  Don't know yet whether this works for
-          //all types of Programs we'd be interested in.
-          if( ret )
-          {
-            Int edgeStart = m_dstOffsets[dv];
-            Int edgeEnd   = m_dstOffsets[dv + 1];
-            for( Int ie = edgeStart; ie < edgeEnd; ++ie )
-              m_activeNextStep[ m_dsts[ie] ] = true;
-          }
+          Int src = m_srcs[ie];
+          sum = Program::gatherReduce(sum, Program::gatherMap(m_vertexData + dv
+            , m_vertexData + src, m_edgeData + m_edgeIndexCSC[ie]));
         }
+        m_applyRet[i] = Program::apply(m_vertexData + dv, sum);
       }
     }
 
 
     //do the scatter operation
-    //wrote this similar to how we might do it on the GPU to help debugging
-    //on the CPU there is no need to use the CSR ordering at all.
     void scatter()
     {
-      for( Int sv = 0; sv < m_nVertices; ++sv )
+      m_activeFlags.clear();
+      m_activeFlags.resize(m_nVertices, false);
+      for( Int i = 0; i < m_active.size(); ++i )
       {
-        if( m_active[sv] )
+        //only run scatter if the vertex has requested its nbd
+        //activated for the next step.
+        if( m_applyRet[i] )
         {
+          Int sv = m_active[i];
           Int edgeStart = m_dstOffsets[sv];
           Int edgeEnd   = m_dstOffsets[sv + 1];
-          const VertexData *srcVert = m_vertexData ? m_vertexData + sv : 0;
           for( Int ie = edgeStart; ie < edgeEnd; ++ie )
           {
             Int dv = m_dsts[ie];
-            const VertexData *dstVert = m_vertexData ? m_vertexData + dv : 0;
-            EdgeData* edgeData = m_edgeData ? m_edgeData + m_edgeIndexCSR[ie] : 0;
-            Program::scatter(srcVert, dstVert, edgeData);
+            m_activeFlags[dv] = true;
+            Program::scatter(m_vertexData + sv, m_vertexData + dv
+              , m_edgeData + m_edgeIndexCSR[ie]);
           }
         }
       }
     }
 
 
+    //sets up the engine for the next iteration
+    //returns the number of active vertices
+    Int nextIter()
+    {
+      m_active.clear();
+      for( Int i = 0; i < m_nVertices; ++i )
+      {
+        if( m_activeFlags[i] )
+          m_active.push_back(i);
+      }
+      return countActive();
+    }
+  
+
     //single entry point for the whole affair, like before.
-    //special cases that don't need gather or scatter can
-    //easily roll their own loop.
+    //Need to improve the key steps to make it more flexible.
+    //Todo.
     void run()
     {
-      while( countActiveNext() )
+      while( countActive() )
       {
         gatherApply();
-
-        //can skip scatter if the algorithm has no edge data.
-        if( m_edgeData )
-          scatter();
+        scatter();
+        nextIter();
       }
-      getResults();
     }
 };  
 

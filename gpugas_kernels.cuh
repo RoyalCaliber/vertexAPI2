@@ -25,13 +25,12 @@ __device__ Int globalThreadId()
 
 //set an array to a range of values
 template<typename Int>
-__global__ void kRange(Int start, Int end, Int incr, Int *out)
+__global__ void kRange(Int start, Int end, Int *out)
 {
   Int tid = globalThreadId<Int>();
   if( tid < end - start )
-    out[tid] = (tid + start) * incr;
+    out[tid] = tid + start;
 }
-
 
 
 //This version does the gatherMap only and generates keys for subsequent
@@ -46,7 +45,7 @@ __global__ void kGatherMap(Int nActiveVertices
   , const Int *srcs
   , const typename Program::VertexData* vertexData
   , const typename Program::EdgeData*   edgeData
-  , Int *dst
+  , Int *dsts
   , typename Program::GatherResult* output)
 {
   //boilerplate from MGPU, VT will be 1 in this kernel until
@@ -55,29 +54,54 @@ __global__ void kGatherMap(Int nActiveVertices
   
   union Shared
   {
-    Int indices[NT * (VT + 1)];    
+    Int indices[NT * (VT + 1)];
+    Int dstVerts[NT * VT];
   };
   __shared__ Shared shared; //so poetic!
 
   Int block = blockIdx.x + blockIdx.y * gridDim.y;
+  Int bTid  = threadIdx.x; //tid within block
 
   int4 range = mgpu::CTALoadBalance<NT, VT>(nTotalEdges, edgeCountScan
-    , nActiveVertices, block, threadIdx.x, mergePathPartitions
+    , nActiveVertices, block, bTid, mergePathPartitions
     , shared.indices, true);
 
-  //should use a variant of DeviceMemToMemLoop here for getting dstVid
-  //iSrcEdge and vertexData[dst]
-  const int bTid = threadIdx.x;
-  const Int tid  = globalThreadId<Int>();
-  Int iActive    = shared.indices[bTid];
-  Int dstVid     = activeVertices[iActive];
-  Int iSrcEdge   = tid - edgeCountScan[iActive];
-  Int srcVid     = srcs[ srcOffsets[dstVid] + iSrcEdge ];
+  //global index into output
+  Int gTid = bTid + range.x;
 
-  //this mapping is not quite right - since there are nActiveEdges + nActiveVertices
-  //threads.
-  output[tid] = Program::gatherMap(vertexData + dstVid, vertexData + srcVid
-    , 0); //need indirect address to edge data here
+  //get the count of edges this block will do
+  int edgeCount = range.y - range.x;
+
+  //get the number of dst vertices this block will do
+  //int nDsts = range.w - range.z;
+
+  int iActive[VT];
+  mgpu::DeviceSharedToReg<NT, VT>(NT * VT, shared.indices, bTid, iActive);
+
+  //get the incoming edge index for this dstVertex
+  int iEdge;
+  if( bTid < edgeCount )
+    iEdge = gTid - shared.indices[edgeCount + iActive[0]];
+  
+  //each thread that is responsible for an edge should now apply Program::gatherMap
+  typename Program::GatherResult result;
+  Int dstVerts[VT];
+  if( bTid < edgeCount )
+  {
+    //should we use an mgpu function for this indirected load?
+    Int dst = dstVerts[0] = activeVertices[iActive[0]];
+    iEdge  += srcOffsets[dst];
+    Int src = srcs[ iEdge ];
+    result = Program::gatherMap(vertexData + dst, vertexData + src, edgeData + iEdge );
+  }
+
+  //write out a key and a result.
+  //Next we will be adding a blockwide or atleast a warpwide reduction here.
+  if( bTid < edgeCount )
+  {
+    dsts[gTid] = dstVerts[0];
+    output[gTid] = result;
+  }
 }
 
 
@@ -91,10 +115,10 @@ __global__ void kApply(Int nActiveVertices
   , Int *retFlags)
 {
   Int tid = globalThreadId<Int>();
-  if( tid > nActiveVertices )
+  if( tid >= nActiveVertices )
     return;
   int vid = activeVertices[tid];
-  retFlags[tid] = Program::apply(vertexData ? vertexData + vid : 0, gatherResults[tid]);  
+  retFlags[tid] = Program::apply(vertexData ? vertexData + vid : 0, gatherResults[tid]);
 }
 
 
