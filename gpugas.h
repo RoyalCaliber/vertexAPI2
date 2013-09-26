@@ -1,7 +1,6 @@
 #ifndef GPUGAS_H__
 #define GPUGAS_H__
 
-
 /*
 Second iteration of a CUDA implementation for GPUs.
 The primary difference in this version as opposed to the first round is that we
@@ -43,7 +42,7 @@ Implementation Notes(VV):
 
 #include "gpugas_kernels.cuh"
 #include <vector>
-
+#include <iterator>
 #include "moderngpu.cuh"
 
 //using this because CUB device-wide reduce_by_key does not yet work
@@ -89,6 +88,7 @@ class GASEngineGPU
   Int *m_activeNext;
   Int  m_nActiveNext;
   Int *m_applyRet; //set of vertices whose neighborhood will be active next
+  char *m_activeFlags;
 
   //some temporaries that are needed for LBS
   Int *m_edgeCountScan;
@@ -172,6 +172,7 @@ class GASEngineGPU
       , m_activeNext(0)
       , m_nActiveNext(0)
       , m_applyRet(0)
+      , m_activeFlags(0)
       , m_edgeCountScan(0)
       , m_gatherMapTmp(0)
       , m_gatherTmp(0)
@@ -195,6 +196,7 @@ class GASEngineGPU
       gpuFree(m_active);
       gpuFree(m_activeNext);
       gpuFree(m_applyRet);
+      gpuFree(m_activeFlags);
       gpuFree(m_edgeCountScan);
       gpuFree(m_gatherMapTmp);
       gpuFree(m_gatherTmp);
@@ -282,6 +284,7 @@ class GASEngineGPU
 
       //allocate temporaries for current multi-part gather kernels
       gpuAlloc(m_applyRet, m_nVertices);
+      gpuAlloc(m_activeFlags, m_nVertices);
       gpuAlloc(m_edgeCountScan, m_nVertices);
       gpuAlloc(m_gatherMapTmp, m_nEdges);
       gpuAlloc(m_gatherTmp, m_nVertices);
@@ -451,10 +454,68 @@ class GASEngineGPU
     }
 
 
-    //not writing a custom kernel for this until we get kGather right, since
-    //many ideas are shared between the two.  Here we just use IntervalMove as
-    //a canned routine to produce a compact list of dsts 
-    void scatter()
+    //helper types for scatterActivate that should be private if nvcc would allow it
+    //ActivateGatherIterator does an extra dereference: iter[x] = offsets[active[x]]    
+    struct ActivateGatherIterator : public std::iterator<std::input_iterator_tag, Int>
+    {
+      Int *m_offsets;
+      Int *m_active;
+
+      __host__ __device__
+      ActivateGatherIterator(Int* offsets, Int* active)
+        : m_offsets(offsets)
+        , m_active(active)
+      {};
+
+      __device__
+      Int operator [](Int i)
+      {
+        return m_offsets[ m_active[i] ];
+      }
+
+      __device__
+      ActivateGatherIterator operator +(Int i) const
+      {
+        return ActivateGatherIterator(m_offsets, m_active + i);
+      }
+    };
+
+    //"ActivateOutputIterator[i] = dst" effectively does m_flags[dst] = true
+    //This does not work because DeviceScatter in moderngpu is written assuming
+    //a T* rather than OutputIterator .
+    struct ActivateOutputIterator
+    {
+      char* m_flags;
+
+      __host__ __device__
+      ActivateOutputIterator(char* flags) : m_flags(flags) {}
+
+      __device__
+      ActivateOutputIterator& operator[](Int i)
+      {
+        return *this;
+      }
+
+      __device__
+      void operator =(Int dst)
+      {
+        m_flags[dst] = true;
+      }
+
+      __device__
+      ActivateOutputIterator operator +(Int i)
+      {
+        return ActivateOutputIterator(m_flags + i);
+      }
+    };
+
+
+    //not writing a custom kernel for this until we get kGather right because
+    //it actually shares a lot with this kernel.
+    //this version only does activate, does not actually invoke Program::scatter,
+    //this will let us improve the gather kernel and then factor it into something
+    //we can use for both gather and scatter.
+    void scatterActivate()
     {
       //counts = m_applyRet ? outEdgeCount[ m_active ] : 0
       //first scan the numbers of edges from the active list
@@ -468,8 +529,15 @@ class GASEngineGPU
         , false
         , *m_mgpuContext);
 
-      printGPUArray(m_edgeCountScan, m_nActive);
-      exit(1);
+      //Gathers the dst vertex ids from m_dsts and writes a true for each
+      //dst vertex into m_activeFlags
+      IntervalGather(nActiveEdges
+        , ActivateGatherIterator(m_dstOffsets, m_active)
+        , m_edgeCountScan
+        , m_nActive
+        , m_dsts
+        , ActivateOutputIterator(m_activeFlags)
+        , *m_mgpuContext);
     }
 
 
@@ -487,9 +555,7 @@ class GASEngineGPU
       while( countActive() )
       {
         gatherApply();
-
-        //can skip scatter if the algorithm has no edge data.
-        scatter();
+        scatterActivate();
         nextIter();
       }
     }
