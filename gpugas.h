@@ -505,7 +505,7 @@ class GASEngineGPU
       __device__
       ActivateOutputIterator operator +(Int i)
       {
-        return ActivateOutputIterator(m_flags + i);
+        return ActivateOutputIterator(m_flags);
       }
     };
 
@@ -538,12 +538,16 @@ class GASEngineGPU
         , m_dsts
         , ActivateOutputIterator(m_activeFlags)
         , *m_mgpuContext);
+
+      //convert m_activeFlags to new active compact list in m_active
+      //set m_nActive to the number of active vertices
     }
 
 
     Int nextIter()
     {
-      return 0;
+      //nothing to be done here.
+      return m_nActive;
     }
 
 
