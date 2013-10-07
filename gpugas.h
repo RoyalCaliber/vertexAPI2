@@ -33,7 +33,7 @@ Implementation Notes(VV):
    ways of doing things host-side.  Since neighter CUB nor MGPU seem to be stable
    APIs, this implementation chooses an MGPU/CUB-neutral way of doing things
    wherever possible.
-  
+
 -  Program::apply() now returns a boolean, indicating whether to active its entire
    neighborhood or not.
 */
@@ -44,6 +44,7 @@ Implementation Notes(VV):
 #include <vector>
 #include <iterator>
 #include "moderngpu.cuh"
+#include "primitives/scatter_if_mgpu.h"
 
 //using this because CUB device-wide reduce_by_key does not yet work
 //and I am still working on a fused gatherMap/gatherReduce kernel.
@@ -59,7 +60,7 @@ class GASEngineGPU
   typedef typename Program::VertexData   VertexData;
   typedef typename Program::EdgeData     EdgeData;
   typedef typename Program::GatherResult GatherResult;
-  
+
   Int         m_nVertices;
   Int         m_nEdges;
 
@@ -120,7 +121,7 @@ class GASEngineGPU
   void copyToHost(T* dst, const T* src, Int n)
   {
     //error check please!
-    cudaMemcpy(dst, src, sizeof(T) * n, cudaMemcpyDeviceToHost);    
+    cudaMemcpy(dst, src, sizeof(T) * n, cudaMemcpyDeviceToHost);
   }
 
   void gpuFree(void *ptr)
@@ -152,7 +153,7 @@ class GASEngineGPU
     for( Int i = 0; i < n; ++i )
       std::cout << i << " " << tmp[i] << std::endl;
   }
-  
+
   public:
     GASEngineGPU()
       : m_nVertices(0)
@@ -205,7 +206,7 @@ class GASEngineGPU
       //don't we need to explicitly clean up m_mgpuContext?
     }
 
-  
+
     //initialize the graph data structures for the GPU
     //All the graph data provided here is "owned" by the GASEngine until
     //explicitly released with getResults().  We may make a copy or we
@@ -243,7 +244,7 @@ class GASEngineGPU
         copyToGPU(m_edgeData, m_edgeDataHost, m_nEdges);
       }
 
-      //allocate CSR and CSC edges      
+      //allocate CSR and CSC edges
       gpuAlloc(m_srcOffsets, m_nVertices + 1);
       gpuAlloc(m_dstOffsets, m_nVertices + 1);
       gpuAlloc(m_srcs, m_nEdges);
@@ -259,7 +260,7 @@ class GASEngineGPU
       std::vector<Int> tmpOffsets(m_nVertices + 1);
       std::vector<Int> tmpVerts(m_nEdges);
       std::vector<Int> tmpEdgeIndex(m_nEdges);
-      
+
       //get CSC representation for gather/apply
       edgeListToCSC(m_nVertices, m_nEdges
         , edgeListSrcs, edgeListDsts
@@ -332,7 +333,7 @@ class GASEngineGPU
     struct EdgeCountScanOp
     {
       const Int* m_offsets;
-    
+
       enum { Commutative = true };
 
       typedef Int input_type;
@@ -373,7 +374,7 @@ class GASEngineGPU
 
       typedef typename EdgeCountScanOp::input_type input_type;
       typedef typename EdgeCountScanOp::value_type value_type;
-      
+
       MGPU_HOST_DEVICE value_type Extract(input_type vert, int index)
       {
         return (index >= 0 && m_predicates[vert]) ? m_offsets[vert + 1] - m_offsets[vert] : 0;
@@ -387,13 +388,13 @@ class GASEngineGPU
 
 
     //nvcc, why can't this struct by private?
-    //wrap Program::gatherReduce for use with thrust    
+    //wrap Program::gatherReduce for use with thrust
     struct ThrustReduceWrapper : thrust::binary_function<GatherResult, GatherResult, GatherResult>
     {
       __device__ GatherResult operator()(const GatherResult &left, const GatherResult &right)
       {
-        return Program::gatherReduce(left, right);      
-      }    
+        return Program::gatherReduce(left, right);
+      }
     };
 
 
@@ -415,7 +416,7 @@ class GASEngineGPU
       MGPU_MEM(int) partitions = mgpu::MergePathPartitions<mgpu::MgpuBoundsUpper>
         (mgpu::counting_iterator<int>(0), nActiveEdges, m_edgeCountScan, m_nActive
         , nThreadsPerBlock, 0, mgpu::less<int>(), *m_mgpuContext);
-        
+
       Int nBlocks = MGPU_DIV_UP(nActiveEdges + m_nActive, nThreadsPerBlock);
       dim3 grid = calcGridDim(nBlocks);
       GPUGASKernels::kGatherMap<Program, Int, nThreadsPerBlock>
@@ -431,7 +432,7 @@ class GASEngineGPU
         , m_edgeData
         , m_gatherDstsTmp
         , m_gatherMapTmp );
-      
+
       //using thrust reduce_by_key because CUB version not complete (doesn't compile)
       //anyway, this will all be rolled into a single kernel as this develops
       thrust::reduce_by_key(thrust::device_pointer_cast(m_gatherDstsTmp)
@@ -455,7 +456,7 @@ class GASEngineGPU
 
 
     //helper types for scatterActivate that should be private if nvcc would allow it
-    //ActivateGatherIterator does an extra dereference: iter[x] = offsets[active[x]]    
+    //ActivateGatherIterator does an extra dereference: iter[x] = offsets[active[x]]
     struct ActivateGatherIterator : public std::iterator<std::input_iterator_tag, Int>
     {
       Int *m_offsets;
@@ -541,6 +542,10 @@ class GASEngineGPU
 
       //convert m_activeFlags to new active compact list in m_active
       //set m_nActive to the number of active vertices
+      m_nActive = scatter_if_inputloc_twophase(m_nVertices,
+                                               m_activeFlags,
+                                               m_active,
+                                               m_mgpuContext);
     }
 
 
@@ -563,7 +568,7 @@ class GASEngineGPU
         nextIter();
       }
     }
-};  
+};
 
 
 
