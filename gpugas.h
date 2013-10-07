@@ -532,6 +532,8 @@ class GASEngineGPU
 
       //Gathers the dst vertex ids from m_dsts and writes a true for each
       //dst vertex into m_activeFlags
+      cudaMemset(m_activeFlags, 0, sizeof(char) * m_nVertices);
+
       IntervalGather(nActiveEdges
         , ActivateGatherIterator(m_dstOffsets, m_active)
         , m_edgeCountScan
