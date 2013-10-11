@@ -2,7 +2,6 @@
 #define SCATTER_IF_H__
 
 #include "moderngpu.cuh"
-#include "../iterators/counting_iterator.cuh"
 
 template<typename InputIt, typename PredicateIt, typename OutputIt>
 __global__
@@ -116,7 +115,7 @@ int scatter_if_inputloc_twophase(int num,
   const int numThreads = 192;
   const int numBlocks = min((num + numThreads - 1) / numThreads, 256);
 
-  countingIterator<int> input_begin(0);
+  mgpu::counting_iterator<int> input_begin(0);
 
   scatterKernel<<<numBlocks, numThreads>>>(input_begin, num,
                                            pred_begin,
