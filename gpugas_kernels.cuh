@@ -90,9 +90,18 @@ __global__ void kGatherMap(Int nActiveVertices
   {
     //should we use an mgpu function for this indirected load?
     Int dst = dstVerts[0] = activeVertices[iActive[0]];
-    iEdge  += srcOffsets[dst];
-    Int src = srcs[ iEdge ];
-    result = Program::gatherMap(vertexData + dst, vertexData + src, edgeData + iEdge );
+    //check if we have a vertex with no incoming edges
+    //this is the matching kludge for faking the count to be 1
+    Int soff = srcOffsets[dst];
+    Int nEdges = srcOffsets[dst + 1] - soff;
+    if( nEdges )
+    {
+      iEdge  += soff;
+      Int src = srcs[ iEdge ];
+      result = Program::gatherMap(vertexData + dst, vertexData + src, edgeData + iEdge );
+    }
+    else
+      result = Program::gatherZero;
   }
 
   //write out a key and a result.

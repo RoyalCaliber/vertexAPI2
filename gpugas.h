@@ -344,7 +344,12 @@ class GASEngineGPU
       {
         //This seems to get called even when out of range, so we have
         //to do an explicit check here.
-        return index >= 0 ? m_offsets[vert + 1] - m_offsets[vert] : 0;
+
+        //To handle the case of vertices with no incoming edges, we
+        //fake a count of 1, hence the max()
+        //There is a corresponding kludge in kGatherMap to ensure that
+        //Program::gatherMap is not actually invoked for such vertices
+        return index >= 0 ? max(m_offsets[vert + 1] - m_offsets[vert], 1) : 0;
       }
 
       MGPU_HOST_DEVICE value_type Plus(value_type t1, value_type t2)
