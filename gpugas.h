@@ -377,7 +377,7 @@ class GASEngineGPU
 
       MGPU_HOST_DEVICE value_type Extract(input_type vert, int index)
       {
-        return (index >= 0 && m_predicates[vert]) ? m_offsets[vert + 1] - m_offsets[vert] : 0;
+        return (index >= 0 && m_predicates[index]) ? m_offsets[vert + 1] - m_offsets[vert] : 0;
       }
 
       PredicatedEdgeCountScanOp(const Int* offsets, const Int* predicates)

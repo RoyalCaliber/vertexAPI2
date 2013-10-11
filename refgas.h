@@ -33,6 +33,7 @@ class GASEngineRef
   std::vector<Int> m_edgeIndexCSR;
 
   //doing similar to the GPU for ease of comparison
+  std::vector<GatherResult> m_gatherResults;
   std::vector<Int>  m_active;
   std::vector<Int>  m_applyRet;
   std::vector<bool> m_activeFlags;
@@ -90,6 +91,7 @@ class GASEngineRef
       m_active.reserve(m_nVertices);
       m_applyRet.resize(m_nVertices);
       m_activeFlags.resize(m_nVertices, false);
+      m_gatherResults.resize(m_nVertices);
     }
 
 
@@ -131,10 +133,18 @@ class GASEngineRef
         for( Int ie = edgeStart; ie < edgeEnd; ++ie )
         {
           Int src = m_srcs[ie];
-          sum = Program::gatherReduce(sum, Program::gatherMap(m_vertexData + dv
-            , m_vertexData + src, m_edgeData + m_edgeIndexCSC[ie]));
+          GatherResult tmp = Program::gatherMap(m_vertexData + dv
+            , m_vertexData + src, m_edgeData + m_edgeIndexCSC[ie]);
+          sum = Program::gatherReduce(sum, tmp);
         }
-        m_applyRet[i] = Program::apply(m_vertexData + dv, sum);
+        m_gatherResults[i] = sum;
+      }
+
+      //separate loop to keep bulk synchronous
+      for( Int i = 0; i < m_active.size(); ++i )
+      {
+        Int dv = m_active[i];
+        m_applyRet[i] = Program::apply(m_vertexData + dv, m_gatherResults[i]);
       }
     }
 
