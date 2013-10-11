@@ -78,16 +78,16 @@ __global__ void kGatherMap(Int nActiveVertices
   int iActive[VT];
   mgpu::DeviceSharedToReg<NT, VT>(NT * VT, shared.indices, bTid, iActive);
 
-  //get the incoming edge index for this dstVertex
-  int iEdge;
-  if( bTid < edgeCount )
-    iEdge = gTid - shared.indices[edgeCount + iActive[0]];
-  
   //each thread that is responsible for an edge should now apply Program::gatherMap
-  typename Program::GatherResult result;
-  Int dstVerts[VT];
   if( bTid < edgeCount )
   {
+    //get the incoming edge index for this dstVertex
+    int iEdge;
+
+    iEdge = gTid - shared.indices[edgeCount + iActive[0] - range.z];
+    typename Program::GatherResult result;
+    Int dstVerts[VT];
+    
     //should we use an mgpu function for this indirected load?
     Int dst = dstVerts[0] = activeVertices[iActive[0]];
     //check if we have a vertex with no incoming edges
@@ -102,12 +102,9 @@ __global__ void kGatherMap(Int nActiveVertices
     }
     else
       result = Program::gatherZero;
-  }
 
-  //write out a key and a result.
-  //Next we will be adding a blockwide or atleast a warpwide reduction here.
-  if( bTid < edgeCount )
-  {
+    //write out a key and a result.
+    //Next we will be adding a blockwide or atleast a warpwide reduction here.
     dsts[gTid] = dstVerts[0];
     output[gTid] = result;
   }

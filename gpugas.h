@@ -50,7 +50,6 @@ Implementation Notes(VV):
 //and I am still working on a fused gatherMap/gatherReduce kernel.
 #include "thrust/reduce.h"
 
-
 //CUDA implementation of GAS API, version 2.
 
 template<typename Program
@@ -104,29 +103,50 @@ class GASEngineGPU
   mgpu::ContextPtr m_mgpuContext;
 
   //convenience
+  void errorCheck(cudaError_t err, const char* file, int line)
+  {
+    if( err != cudaSuccess )
+    {
+      printf("%s(%d): cuda error %d (%s)\n", file, line, err, cudaGetErrorString(err));
+      abort();
+    }
+  }
+
+  //use only for debugging kernels
+  //this slows stuff down a LOT
+  void syncAndErrorCheck(const char* file, int line)
+  {
+    cudaThreadSynchronize();
+    errorCheck(cudaGetLastError(), file, line);
+  }
+
+  //this is undefined at the end of this template definition
+  #define CHECK(X) errorCheck(X, __FILE__, __LINE__)
+  #define SYNC_CHECK() syncAndErrorCheck(__FILE__, __LINE__)
+  
   template<typename T>
   void gpuAlloc(T* &p, Int n)
   {
-    //error check please!
-    cudaMalloc(&p, sizeof(T) * n);
+    CHECK( cudaMalloc(&p, sizeof(T) * n) );
   }
 
   template<typename T>
   void copyToGPU(T* dst, const T* src, Int n)
   {
-    cudaMemcpy(dst, src, sizeof(T) * n, cudaMemcpyHostToDevice);
+    CHECK( cudaMemcpy(dst, src, sizeof(T) * n, cudaMemcpyHostToDevice) );
   }
 
   template<typename T>
   void copyToHost(T* dst, const T* src, Int n)
   {
     //error check please!
-    cudaMemcpy(dst, src, sizeof(T) * n, cudaMemcpyDeviceToHost);
+    CHECK( cudaMemcpy(dst, src, sizeof(T) * n, cudaMemcpyDeviceToHost) );
   }
 
   void gpuFree(void *ptr)
   {
-    if( ptr ) cudaFree(ptr);
+    if( ptr )
+      CHECK( cudaFree(ptr) );
   }
 
 
@@ -287,9 +307,11 @@ class GASEngineGPU
       gpuAlloc(m_applyRet, m_nVertices);
       gpuAlloc(m_activeFlags, m_nVertices);
       gpuAlloc(m_edgeCountScan, m_nVertices);
-      gpuAlloc(m_gatherMapTmp, m_nEdges);
+      //have to allocate extra for faked incoming edges when there are
+      //no incoming edges
+      gpuAlloc(m_gatherMapTmp, m_nEdges + m_nVertices);
       gpuAlloc(m_gatherTmp, m_nVertices);
-      gpuAlloc(m_gatherDstsTmp, m_nEdges);
+      gpuAlloc(m_gatherDstsTmp, m_nEdges + m_nVertices);
       gpuAlloc(m_reduceByKeyTmp, m_nVertices);
     }
 
@@ -315,7 +337,6 @@ class GASEngineGPU
       const int nBlocks = divRoundUp(m_nActive, nThreadsPerBlock);
       dim3 grid = calcGridDim(nBlocks);
       GPUGASKernels::kRange<<<grid, nThreadsPerBlock>>>(vertexStart, vertexEnd, m_active);
-      cudaThreadSynchronize();
     }
 
 
@@ -415,7 +436,6 @@ class GASEngineGPU
         , &nActiveEdges
         , false
         , *m_mgpuContext);
-
       const int nThreadsPerBlock = 128;
 
       MGPU_MEM(int) partitions = mgpu::MergePathPartitions<mgpu::MgpuBoundsUpper>
@@ -437,6 +457,7 @@ class GASEngineGPU
         , m_edgeData
         , m_gatherDstsTmp
         , m_gatherMapTmp );
+      SYNC_CHECK();
 
       //using thrust reduce_by_key because CUB version not complete (doesn't compile)
       //anyway, this will all be rolled into a single kernel as this develops
@@ -447,6 +468,7 @@ class GASEngineGPU
         , thrust::device_pointer_cast(m_gatherTmp)
         , thrust::equal_to<Int>()
         , ThrustReduceWrapper());
+      SYNC_CHECK();
 
 
       //Now run the apply kernel
@@ -456,6 +478,7 @@ class GASEngineGPU
         dim3 grid = calcGridDim(nBlocks);
         GPUGASKernels::kApply<Program, Int><<<grid, nThreadsPerBlock>>>
           (m_nActive, m_active, m_gatherTmp, m_vertexData, m_applyRet);
+        SYNC_CHECK();
       }
     }
 
@@ -534,10 +557,11 @@ class GASEngineGPU
         , &nActiveEdges
         , false
         , *m_mgpuContext);
+      SYNC_CHECK();
 
       //Gathers the dst vertex ids from m_dsts and writes a true for each
       //dst vertex into m_activeFlags
-      cudaMemset(m_activeFlags, 0, sizeof(char) * m_nVertices);
+      CHECK( cudaMemset(m_activeFlags, 0, sizeof(char) * m_nVertices) );
 
       IntervalGather(nActiveEdges
         , ActivateGatherIterator(m_dstOffsets, m_active)
@@ -546,6 +570,7 @@ class GASEngineGPU
         , m_dsts
         , ActivateOutputIterator(m_activeFlags)
         , *m_mgpuContext);
+      SYNC_CHECK();
 
       //convert m_activeFlags to new active compact list in m_active
       //set m_nActive to the number of active vertices
@@ -553,6 +578,7 @@ class GASEngineGPU
                                                m_activeFlags,
                                                m_active,
                                                m_mgpuContext);
+      SYNC_CHECK();
     }
 
 
@@ -575,6 +601,10 @@ class GASEngineGPU
         nextIter();
       }
     }
+
+    //remove macro clutter
+    #undef CHECK
+    #undef SYNC_CHECK
 };
 
 
