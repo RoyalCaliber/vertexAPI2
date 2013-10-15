@@ -110,7 +110,7 @@ int scatter_if_inputloc_twophase(int num,
   MGPU_MEM(int) d_map = mgpuContext->Malloc<int>(num);
 
   mgpu::Scan<mgpu::MgpuScanTypeExc>(pred_begin, num, d_map->get(), mgpu::ScanOpAdd(),
-                                    &total, true, *mgpuContext);
+                                    &total, false, *mgpuContext);
 
   const int numThreads = 192;
   const int numBlocks = min((num + numThreads - 1) / numThreads, 256);
