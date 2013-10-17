@@ -49,6 +49,7 @@ Implementation Notes(VV):
 //using this because CUB device-wide reduce_by_key does not yet work
 //and I am still working on a fused gatherMap/gatherReduce kernel.
 #include "thrust/reduce.h"
+#include "thrust/device_ptr.h"
 
 //CUDA implementation of GAS API, version 2.
 
@@ -123,7 +124,7 @@ class GASEngineGPU
   //this is undefined at the end of this template definition
   #define CHECK(X) errorCheck(X, __FILE__, __LINE__)
   #define SYNC_CHECK() syncAndErrorCheck(__FILE__, __LINE__)
-  
+
   template<typename T>
   void gpuAlloc(T* &p, Int n)
   {
@@ -152,9 +153,13 @@ class GASEngineGPU
 
   dim3 calcGridDim(Int n)
   {
-    uint64_t tmp = n;
-    return dim3(tmp & 0xffff, 1 + ((tmp & 0xffff0000l)>>16)
-      , 1 + ((tmp & 0xffff00000000l) >> 32));
+    if (n < 65536)
+      return dim3(n, 1, 1);
+    else {
+      int side1 = static_cast<int>(sqrt((double)n));
+      int side2 = static_cast<int>(ceil((double)n / side1));
+      return dim3(side2, side1, 1);
+    }
   }
 
 
@@ -442,12 +447,16 @@ class GASEngineGPU
         (mgpu::counting_iterator<int>(0), nActiveEdges, m_edgeCountScan, m_nActive
         , nThreadsPerBlock, 0, mgpu::less<int>(), *m_mgpuContext);
 
+
       Int nBlocks = MGPU_DIV_UP(nActiveEdges + m_nActive, nThreadsPerBlock);
+
+
       dim3 grid = calcGridDim(nBlocks);
       GPUGASKernels::kGatherMap<Program, Int, nThreadsPerBlock>
         <<<grid, nThreadsPerBlock>>>
         ( m_nActive
         , m_active
+        , nBlocks
         , nActiveEdges
         , m_edgeCountScan
         , partitions->get()
@@ -458,6 +467,7 @@ class GASEngineGPU
         , m_gatherDstsTmp
         , m_gatherMapTmp );
       SYNC_CHECK();
+
 
       //using thrust reduce_by_key because CUB version not complete (doesn't compile)
       //anyway, this will all be rolled into a single kernel as this develops

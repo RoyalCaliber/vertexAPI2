@@ -18,8 +18,7 @@ namespace GPUGASKernels
 template<typename Int>
 __device__ Int globalThreadId()
 {
-  return threadIdx.x + blockDim.x
-    * (blockIdx.x + blockIdx.y * gridDim.y + blockIdx.z * gridDim.y * gridDim.z);
+  return threadIdx.x + blockDim.x * (blockIdx.x + blockIdx.y * gridDim.x + blockIdx.z * gridDim.x * gridDim.y);
 }
 
 
@@ -38,6 +37,7 @@ __global__ void kRange(Int start, Int end, Int *out)
 template<typename Program, typename Int, int NT>
 __global__ void kGatherMap(Int nActiveVertices
   , const Int *activeVertices
+  , const int numBlocks
   , Int nTotalEdges
   , const Int *edgeCountScan
   , const Int *mergePathPartitions
@@ -59,8 +59,11 @@ __global__ void kGatherMap(Int nActiveVertices
   };
   __shared__ Shared shared; //so poetic!
 
-  Int block = blockIdx.x + blockIdx.y * gridDim.y;
+  Int block = blockIdx.x + blockIdx.y * gridDim.x;
   Int bTid  = threadIdx.x; //tid within block
+
+  if (block >= numBlocks)
+    return;
 
   int4 range = mgpu::CTALoadBalance<NT, VT>(nTotalEdges, edgeCountScan
     , nActiveVertices, block, bTid, mergePathPartitions
