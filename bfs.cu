@@ -76,7 +76,7 @@ int main(int argc, char** argv)
   BFS::gatherZero = nVertices + 1;
 
   //initialize vertex data
-  std::vector<BFS::VertexData> vertexData;
+  std::vector<BFS::VertexData> vertexData(nVertices);
   for( int i = 0; i < nVertices; ++i )
     vertexData[i].depth = -1; 
 
