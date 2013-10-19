@@ -7,7 +7,7 @@
 
 int64_t currentTime()
 {
-  struct timeval tv;  
+  struct timeval tv;
   gettimeofday(&tv, 0);
   return tv.tv_sec * 1000000l + tv.tv_usec;
 }
@@ -21,7 +21,7 @@ int parseCmdLineSimple(int argc, char** argv, const char* fmt, ...)
     printf("parseCmdLineSimple: expected %d arguments, got %d\n", nArgs, argc);
     exit(1);
   }
-      
+
   va_list args;
   va_start(args, fmt);
   int iArg = 1;
@@ -30,6 +30,7 @@ int parseCmdLineSimple(int argc, char** argv, const char* fmt, ...)
     switch( *f )
     {
       case 's': *(va_arg(args, char**)) = strdup(argv[iArg]); break;
+      case 'i': *(va_arg(args, int*))   = atoi(argv[iArg]); break;
       default:
         printf("parseCmdLineSimple: bad format character '%c'\n", *f);
         exit(1);
