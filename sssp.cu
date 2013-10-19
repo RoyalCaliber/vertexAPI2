@@ -67,7 +67,7 @@ int main(int argc, char** argv)
   loadGraph(inputFilename, nVertices, srcs, dsts);
 
   //initialize vertex data
-  std::vector<SSSP::VertexData> vertexData;
+  std::vector<SSSP::VertexData> vertexData(nVertices);
   for( int i = 0; i < nVertices; ++i )
     vertexData[i].dist = nVertices + 1; //larger than max diameter
   SSSP::gatherZero = nVertices + 1;
@@ -79,4 +79,6 @@ int main(int argc, char** argv)
   engine.getResults();
 
   //output distances;
+  for (int i = 0; i < nVertices; ++i)
+    printf("%d %d\n", i, vertexData[i].dist);
 }
