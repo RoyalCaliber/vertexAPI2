@@ -88,6 +88,7 @@ int main(int argc, char** argv)
   {
     //run apply without gather
     engine.gatherApply(false);
+    //I think we'll need to run scatterActivate here (without the scatter) - eke
     //no scatter
     ++BFS::iterationCount;
   }
