@@ -36,8 +36,8 @@ struct SSSP
 
   static bool apply(VertexData* vert, int dist)
   {
-    bool changed = dist != vert->dist;
-    vert->dist = dist;
+    bool changed = dist < vert->dist;
+    vert->dist = min(vert->dist, dist);
     return changed;
   }
 
@@ -64,17 +64,26 @@ int main(int argc, char** argv)
   int nVertices;
   std::vector<int> srcs;
   std::vector<int> dsts;
-  loadGraph(inputFilename, nVertices, srcs, dsts);
+  std::vector<int> edge_data;
+  loadGraph(inputFilename, nVertices, srcs, dsts, &edge_data);
 
   //initialize vertex data
   std::vector<SSSP::VertexData> vertexData(nVertices);
-  for( int i = 0; i < nVertices; ++i )
-    vertexData[i].dist = nVertices + 1; //larger than max diameter
+  for( int i = 0; i < nVertices; ++i ) {
+    if (i != sourceVertex)
+      vertexData[i].dist = nVertices + 1; //larger than max diameter
+    else
+      vertexData[i].dist = 0;
+  }
+
   SSSP::gatherZero = nVertices + 1;
 
   GASEngineRef<SSSP> engine;
-  engine.setGraph(nVertices, &vertexData[0], srcs.size(), 0, &srcs[0], &dsts[0]);
-  engine.setActive(sourceVertex, sourceVertex+1);
+  engine.setGraph(nVertices, &vertexData[0], srcs.size(), (SSSP::EdgeData *)&edge_data[0], &srcs[0], &dsts[0]);
+
+  //TODO, setting all vertices to active for first step works, but it would
+  //be faster to instead set to neighbors of starting vertex
+  engine.setActive(0, nVertices);
   engine.run();
   engine.getResults();
 
