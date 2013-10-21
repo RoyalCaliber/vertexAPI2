@@ -150,7 +150,7 @@ class GASEngineRef
 
 
     //do the scatter operation
-    void scatter()
+    void scatterActivate(bool haveScatter=true)
     {
       m_activeFlags.clear();
       m_activeFlags.resize(m_nVertices, false);
@@ -167,8 +167,11 @@ class GASEngineRef
           {
             Int dv = m_dsts[ie];
             m_activeFlags[dv] = true;
-            Program::scatter(m_vertexData + sv, m_vertexData + dv
-              , m_edgeData + m_edgeIndexCSR[ie]);
+            if( haveScatter )
+            {
+               Program::scatter(m_vertexData + sv, m_vertexData + dv
+                , m_edgeData + m_edgeIndexCSR[ie]);
+            }
           }
         }
       }
@@ -197,7 +200,7 @@ class GASEngineRef
       while( countActive() )
       {
         gatherApply();
-        scatter();
+        scatterActivate();
         nextIter();
       }
     }

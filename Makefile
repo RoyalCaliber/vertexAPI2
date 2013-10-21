@@ -11,7 +11,7 @@ LD_LIBS = -lz -lmgpu
 
 HEADERS = graphio.h util.h refgas.h gpugas.h gpugas_kernels.cuh
 
-BINARIES = pagerank sssp
+BINARIES = pagerank sssp bfs
 
 all: $(BINARIES)
 
@@ -33,11 +33,11 @@ sssp.o: sssp.cu $(HEADERS) Makefile
 sssp: sssp.o graphio.o util.o
 	nvcc $(NVCC_OPTS) $(NVCC_ARCHS) -o $@ $^ $(LD_LIBS)
 
-#bfs.o: bfs.cu $(HEADERS) Makefile
-#	nvcc -c -o $@ $< $(NVCC_OPTS) $(NVCC_ARCHS) 
+bfs.o: bfs.cu $(HEADERS) Makefile
+	nvcc -c -o $@ $< $(NVCC_OPTS) $(NVCC_ARCHS) 
 
-#bfs: bfs.o graphio.o util.o
-#	nvcc $(NVCC_OPTS) $(NVCC_ARCHS) -o $@ $^ $(LD_LIBS)
+bfs: bfs.o graphio.o util.o
+	nvcc $(NVCC_OPTS) $(NVCC_ARCHS) -o $@ $^ $(LD_LIBS)
 
 clean:
 	rm -f $(BINARIES) *.o

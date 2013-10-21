@@ -454,58 +454,60 @@ class GASEngineGPU
     };
 
 
-    void gatherApply()
+    void gatherApply(bool haveGather=true)
     {
-      //first scan the numbers of edges from the active list
-      EdgeCountScanOp ecScanOp(m_srcOffsets);
-      Int nActiveEdges;
-      mgpu::Scan<mgpu::MgpuScanTypeExc, Int*, Int*, EdgeCountScanOp>(m_active
-        , m_nActive
-        , m_edgeCountScan
-        , ecScanOp
-        , &nActiveEdges
-        , false
-        , *m_mgpuContext);
-      const int nThreadsPerBlock = 128;
+      if( haveGather )
+      {
+        //first scan the numbers of edges from the active list
+        EdgeCountScanOp ecScanOp(m_srcOffsets);
+        Int nActiveEdges;
+        mgpu::Scan<mgpu::MgpuScanTypeExc, Int*, Int*, EdgeCountScanOp>(m_active
+          , m_nActive
+          , m_edgeCountScan
+          , ecScanOp
+          , &nActiveEdges
+          , false
+          , *m_mgpuContext);
+        const int nThreadsPerBlock = 128;
 
-      MGPU_MEM(int) partitions = mgpu::MergePathPartitions<mgpu::MgpuBoundsUpper>
-        (mgpu::counting_iterator<int>(0), nActiveEdges, m_edgeCountScan, m_nActive
-        , nThreadsPerBlock, 0, mgpu::less<int>(), *m_mgpuContext);
-
-
-      Int nBlocks = MGPU_DIV_UP(nActiveEdges + m_nActive, nThreadsPerBlock);
-
-
-      dim3 grid = calcGridDim(nBlocks);
-      GPUGASKernels::kGatherMap<Program, Int, nThreadsPerBlock, !sortEdgesForGather>
-        <<<grid, nThreadsPerBlock>>>
-        ( m_nActive
-        , m_active
-        , nBlocks
-        , nActiveEdges
-        , m_edgeCountScan
-        , partitions->get()
-        , m_srcOffsets
-        , m_srcs
-        , m_vertexData
-        , m_edgeData
-        , m_edgeIndexCSC
-        , m_gatherDstsTmp
-        , m_gatherMapTmp );
-      SYNC_CHECK();
+        MGPU_MEM(int) partitions = mgpu::MergePathPartitions<mgpu::MgpuBoundsUpper>
+          (mgpu::counting_iterator<int>(0), nActiveEdges, m_edgeCountScan, m_nActive
+          , nThreadsPerBlock, 0, mgpu::less<int>(), *m_mgpuContext);
 
 
-      //using thrust reduce_by_key because CUB version not complete (doesn't compile)
-      //anyway, this will all be rolled into a single kernel as this develops
-      thrust::reduce_by_key(thrust::device_pointer_cast(m_gatherDstsTmp)
-        , thrust::device_pointer_cast(m_gatherDstsTmp + nActiveEdges)
-        , thrust::device_pointer_cast(m_gatherMapTmp)
-        , thrust::device_pointer_cast(m_reduceByKeyTmp)
-        , thrust::device_pointer_cast(m_gatherTmp)
-        , thrust::equal_to<Int>()
-        , ThrustReduceWrapper());
-      SYNC_CHECK();
+        Int nBlocks = MGPU_DIV_UP(nActiveEdges + m_nActive, nThreadsPerBlock);
 
+
+        dim3 grid = calcGridDim(nBlocks);
+        GPUGASKernels::kGatherMap<Program, Int, nThreadsPerBlock, !sortEdgesForGather>
+          <<<grid, nThreadsPerBlock>>>
+          ( m_nActive
+          , m_active
+          , nBlocks
+          , nActiveEdges
+          , m_edgeCountScan
+          , partitions->get()
+          , m_srcOffsets
+          , m_srcs
+          , m_vertexData
+          , m_edgeData
+          , m_edgeIndexCSC
+          , m_gatherDstsTmp
+          , m_gatherMapTmp );
+        SYNC_CHECK();
+
+
+        //using thrust reduce_by_key because CUB version not complete (doesn't compile)
+        //anyway, this will all be rolled into a single kernel as this develops
+        thrust::reduce_by_key(thrust::device_pointer_cast(m_gatherDstsTmp)
+          , thrust::device_pointer_cast(m_gatherDstsTmp + nActiveEdges)
+          , thrust::device_pointer_cast(m_gatherMapTmp)
+          , thrust::device_pointer_cast(m_reduceByKeyTmp)
+          , thrust::device_pointer_cast(m_gatherTmp)
+          , thrust::equal_to<Int>()
+          , ThrustReduceWrapper());
+        SYNC_CHECK();
+      }
 
       //Now run the apply kernel
       {
@@ -580,7 +582,7 @@ class GASEngineGPU
     //this version only does activate, does not actually invoke Program::scatter,
     //this will let us improve the gather kernel and then factor it into something
     //we can use for both gather and scatter.
-    void scatterActivate()
+    void scatterActivate(bool haveScatter=true)
     {
       //counts = m_applyRet ? outEdgeCount[ m_active ] : 0
       //first scan the numbers of edges from the active list

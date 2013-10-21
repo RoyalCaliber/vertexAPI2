@@ -3,52 +3,36 @@
 #include "util.h"
 #include "graphio.h"
 #include "refgas.h"
+#include "gpugas.h"
 
 
-
-struct BFS
+struct BFSBase
 {
-  //global iteration count, terrible! OK, while we still figure out
-  //how to do the important stuff correctly, but correct method would
-  //be to add engine context to all the GAS prototypes
-  static int iterationCount;
-  
   struct VertexData
   {
     int depth;
   };
 
-
   struct EdgeData {}; //nothing
 
-
   typedef int GatherResult;
-  static int gatherZero; //this should be set to nVertices + 1
+  static const int gatherZero = INT_MAX - 1;
 
-
+  __host__ __device__
   static int gatherReduce(const int& left, const int& right)
   {
     return 0; //do nothing
   }
 
 
+  __host__ __device__
   static int gatherMap(const VertexData* dst, const VertexData *src, const EdgeData* edge)
   {
     return 0; //do nothing
   }
 
 
-  static bool apply(VertexData* vert, int dist)
-  {
-    if( vert->depth == -1 )
-    {
-      vert->depth = iterationCount;
-      return true;
-    }
-    return false;
-  }
-
-
+  __host__ __device__
   static void scatter(const VertexData* src, const VertexData *dst, EdgeData* edge)
   {
     //nothing
@@ -56,8 +40,39 @@ struct BFS
 };
 
 
-int BFS::iterationCount;
-int BFS::gatherZero;
+//How can we factor these correctly?
+//The __device__ qualifier can not be made template-conditional, so template
+//based workarounds are not possible.
+int g_iterationCount;
+__device__ __constant__ int g_iterationCountGPU;
+
+struct BFSHost : public BFSBase
+{
+  static bool apply(VertexData* vert, int dist)
+  {
+    if( vert->depth == -1 )
+    {
+      vert->depth = g_iterationCount;
+      return true;
+    }
+    return false;
+  }
+};
+
+
+struct BFSDev : public BFSBase
+{
+  __device__
+  static bool apply(VertexData* vert, int dist)
+  {
+    if( vert->depth == -1 )
+    {
+      vert->depth = g_iterationCountGPU;
+      return true;
+    }
+    return false;
+  }
+};
 
 
 int main(int argc, char** argv)
@@ -73,26 +88,62 @@ int main(int argc, char** argv)
   std::vector<int> dsts;
   loadGraph(inputFilename, nVertices, srcs, dsts);
 
-  BFS::gatherZero = nVertices + 1;
-
-  //initialize vertex data
-  std::vector<BFS::VertexData> vertexData(nVertices);
-  for( int i = 0; i < nVertices; ++i )
-    vertexData[i].depth = -1; 
-
-  GASEngineRef<BFS> engine;
-  engine.setGraph(nVertices, &vertexData[0], srcs.size(), 0, &srcs[0], &dsts[0]);
-  engine.setActive(sourceVertex, sourceVertex+1);
-  BFS::iterationCount = 0;
-  while( engine.nextIter() )
+  //run on host
   {
-    //run apply without gather
-    engine.gatherApply(false);
-    //I think we'll need to run scatterActivate here (without the scatter) - eke
-    //no scatter
-    ++BFS::iterationCount;
-  }
-  engine.getResults();
+    //initialize vertex data
+    std::vector<BFSHost::VertexData> vertexData(nVertices);
+    for( int i = 0; i < nVertices; ++i )
+      vertexData[i].depth = -1; 
 
-  //output distances;
+    GASEngineRef<BFSHost> engine;
+    engine.setGraph(nVertices, &vertexData[0], srcs.size(), 0, &srcs[0], &dsts[0]);
+    engine.setActive(sourceVertex, sourceVertex+1);
+    g_iterationCount = 0;
+    while( engine.countActive() )
+    {
+      //run apply without gather
+      engine.gatherApply(false);
+      engine.scatterActivate(false);
+      engine.nextIter();
+      ++g_iterationCount;
+    }
+    engine.getResults();
+
+    //output distances;
+    for( int i = 0; i < nVertices; ++i )
+      printf("%d %d\n", i, vertexData[i].depth);
+  }
+
+
+  //run on gpu
+  {
+    //initialize vertex data
+    std::vector<BFSDev::VertexData> vertexData(nVertices);
+    for( int i = 0; i < nVertices; ++i )
+      vertexData[i].depth = -1; 
+
+    GASEngineGPU<BFSDev> engine;
+    engine.setGraph(nVertices, &vertexData[0], srcs.size(), 0, &srcs[0], &dsts[0]);
+    engine.setActive(sourceVertex, sourceVertex+1);
+    int iter = 0;
+    cudaMemcpyToSymbol(g_iterationCountGPU, &iter, sizeof(iter));
+    while( engine.countActive() )
+    {
+      //run apply without gather
+      engine.gatherApply(false);
+      engine.scatterActivate(false);
+      engine.nextIter();
+      ++iter;
+      cudaMemcpyToSymbol(g_iterationCountGPU, &iter, sizeof(iter));
+    }
+    engine.getResults();
+
+    //output distances;
+    for( int i = 0; i < nVertices; ++i )
+      printf("%d %d\n", i, vertexData[i].depth);
+  }
+
+
+
+    
 }
