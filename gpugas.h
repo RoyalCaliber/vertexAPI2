@@ -54,7 +54,8 @@ Implementation Notes(VV):
 //CUDA implementation of GAS API, version 2.
 
 template<typename Program
-  , typename Int = int32_t>
+  , typename Int = int32_t
+  , bool sortEdgesForGather = true>
 class GASEngineGPU
 {
   typedef typename Program::VertexData   VertexData;
@@ -263,12 +264,6 @@ class GASEngineGPU
         copyToGPU(m_vertexData, m_vertexDataHost, m_nVertices);
       }
 
-      if( m_edgeDataHost )
-      {
-        gpuAlloc(m_edgeData, m_nEdges);
-        copyToGPU(m_edgeData, m_edgeDataHost, m_nEdges);
-      }
-
       //allocate CSR and CSC edges
       gpuAlloc(m_srcOffsets, m_nVertices + 1);
       gpuAlloc(m_dstOffsets, m_nVertices + 1);
@@ -279,30 +274,57 @@ class GASEngineGPU
       //We only need one of these since we can sort the edgeData directly into
       //either CSR or CSC.  But the memory and performance overhead of these
       //arrays needs to be discussed.
-      gpuAlloc(m_edgeIndexCSC, m_nEdges);
-      gpuAlloc(m_edgeIndexCSR, m_nEdges);
+      if( sortEdgesForGather )
+        gpuAlloc(m_edgeIndexCSR, m_nEdges);
+      else
+        gpuAlloc(m_edgeIndexCSC, m_nEdges);
 
+      //these are pretty big temporaries, but we're assuming 'unlimited'
+      //host memory for now.  
       std::vector<Int> tmpOffsets(m_nVertices + 1);
       std::vector<Int> tmpVerts(m_nEdges);
       std::vector<Int> tmpEdgeIndex(m_nEdges);
+      std::vector<EdgeData> sortedEdgeData(m_nEdges);
 
       //get CSC representation for gather/apply
       edgeListToCSC(m_nVertices, m_nEdges
         , edgeListSrcs, edgeListDsts
         , &tmpOffsets[0], &tmpVerts[0], &tmpEdgeIndex[0]);
 
+      //sort edge data into CSC order to avoid an indirected read in gather
+      if( sortEdgesForGather )
+      {
+        for(size_t i = 0; i < m_nEdges; ++i)
+          sortedEdgeData[i] = m_edgeDataHost[ tmpEdgeIndex[i] ];
+      }
+      else
+        copyToGPU(m_edgeIndexCSC, &tmpEdgeIndex[0], m_nEdges);
+        
       copyToGPU(m_srcOffsets, &tmpOffsets[0], m_nVertices + 1);
-      copyToGPU(m_srcs, &tmpVerts[0], m_nEdges);
-      copyToGPU(m_edgeIndexCSC, &tmpEdgeIndex[0], m_nEdges);
+      copyToGPU(m_srcs, &tmpVerts[0], m_nEdges);      
 
       //get CSR representation for activate/scatter
       edgeListToCSR(m_nVertices, m_nEdges
         , edgeListSrcs, edgeListDsts
         , &tmpOffsets[0], &tmpVerts[0], &tmpEdgeIndex[0]);
 
+      //sort edge data into CSR order to avoid an indirected write in scatter
+      if( !sortEdgesForGather )
+      {
+        for(size_t i = 0; i < m_nEdges; ++i)
+          sortedEdgeData[i] = m_edgeDataHost[ tmpEdgeIndex[i] ];
+      }
+      else
+        copyToGPU(m_edgeIndexCSR, &tmpEdgeIndex[0], m_nEdges);
+
       copyToGPU(m_dstOffsets, &tmpOffsets[0], m_nVertices + 1);
       copyToGPU(m_dsts, &tmpVerts[0], m_nEdges);
-      copyToGPU(m_edgeIndexCSR, &tmpEdgeIndex[0], m_nEdges);
+
+      if( m_edgeDataHost )
+      {
+        gpuAlloc(m_edgeData, m_nEdges);
+        copyToGPU(m_edgeData, &sortedEdgeData[0], m_nEdges);
+      }
 
       //allocate active lists
       gpuAlloc(m_active, m_nVertices);
@@ -330,7 +352,10 @@ class GASEngineGPU
       if( m_vertexDataHost )
         copyToHost(m_vertexDataHost, m_vertexData, m_nVertices);
       if( m_edgeDataHost )
+      {
+        //unsort the edge data - todo
         copyToHost(m_edgeDataHost, m_edgeData, m_nEdges);
+      }
     }
 
 
