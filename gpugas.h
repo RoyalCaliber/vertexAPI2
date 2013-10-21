@@ -477,7 +477,7 @@ class GASEngineGPU
 
 
       dim3 grid = calcGridDim(nBlocks);
-      GPUGASKernels::kGatherMap<Program, Int, nThreadsPerBlock>
+      GPUGASKernels::kGatherMap<Program, Int, nThreadsPerBlock, !sortEdgesForGather>
         <<<grid, nThreadsPerBlock>>>
         ( m_nActive
         , m_active
@@ -489,6 +489,7 @@ class GASEngineGPU
         , m_srcs
         , m_vertexData
         , m_edgeData
+        , m_edgeIndexCSC
         , m_gatherDstsTmp
         , m_gatherMapTmp );
       SYNC_CHECK();

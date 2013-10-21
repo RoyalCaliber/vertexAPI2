@@ -34,7 +34,7 @@ __global__ void kRange(Int start, Int end, Int *out)
 
 //This version does the gatherMap only and generates keys for subsequent
 //use iwth thrust reduce_by_key
-template<typename Program, typename Int, int NT>
+template<typename Program, typename Int, int NT, int indirectedGather>
 __global__ void kGatherMap(Int nActiveVertices
   , const Int *activeVertices
   , const int numBlocks
@@ -45,6 +45,7 @@ __global__ void kGatherMap(Int nActiveVertices
   , const Int *srcs
   , const typename Program::VertexData* vertexData
   , const typename Program::EdgeData*   edgeData
+  , const Int* edgeIndexCSC
   , Int *dsts
   , typename Program::GatherResult* output)
 {
@@ -101,7 +102,10 @@ __global__ void kGatherMap(Int nActiveVertices
     {
       iEdge  += soff;
       Int src = srcs[ iEdge ];
-      result = Program::gatherMap(vertexData + dst, vertexData + src, edgeData + iEdge );
+      if( indirectedGather )
+        result = Program::gatherMap(vertexData + dst, vertexData + src, edgeData + edgeIndexCSC[iEdge] );
+      else
+        result = Program::gatherMap(vertexData + dst, vertexData + src, edgeData + iEdge );
     }
     else
       result = Program::gatherZero;
