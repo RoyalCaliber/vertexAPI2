@@ -6,7 +6,13 @@
 #include "gpugas.h"
 
 
-struct BFSBase
+//nvcc doesn't like the __device__ variable to be a static member inside BFS
+//so these are both outside.
+int g_iterationCount;
+__device__ __constant__ int g_iterationCountGPU;
+
+
+struct BFS
 {
   struct VertexData
   {
@@ -33,6 +39,22 @@ struct BFSBase
 
 
   __host__ __device__
+  static bool apply(VertexData* vert, int dist)
+  {
+    if( vert->depth == -1 )
+    {
+      #ifdef __CUDA_ARCH__
+        vert->depth = g_iterationCountGPU;
+      #else
+        vert->depth = g_iterationCount;
+      #endif        
+      return true;
+    }
+    return false;
+  }
+
+
+  __host__ __device__
   static void scatter(const VertexData* src, const VertexData *dst, EdgeData* edge)
   {
     //nothing
@@ -40,39 +62,33 @@ struct BFSBase
 };
 
 
-//How can we factor these correctly?
-//The __device__ qualifier can not be made template-conditional, so template
-//based workarounds are not possible.
-int g_iterationCount;
-__device__ __constant__ int g_iterationCountGPU;
-
-struct BFSHost : public BFSBase
-{
-  static bool apply(VertexData* vert, int dist)
-  {
-    if( vert->depth == -1 )
-    {
-      vert->depth = g_iterationCount;
-      return true;
-    }
-    return false;
-  }
-};
-
-
-struct BFSDev : public BFSBase
-{
-  __device__
-  static bool apply(VertexData* vert, int dist)
-  {
-    if( vert->depth == -1 )
-    {
-      vert->depth = g_iterationCountGPU;
-      return true;
-    }
-    return false;
-  }
-};
+//struct BFSHost : public BFSBase
+//{
+//  static bool apply(VertexData* vert, int dist)
+//  {
+//    if( vert->depth == -1 )
+//    {
+//      vert->depth = g_iterationCount;
+//      return true;
+//    }
+//    return false;
+//  }
+//};
+//
+//
+//struct BFSDev : public BFSBase
+//{
+//  __device__
+//  static bool apply(VertexData* vert, int dist)
+//  {
+//    if( vert->depth == -1 )
+//    {
+//      vert->depth = g_iterationCountGPU;
+//      return true;
+//    }
+//    return false;
+//  }
+//};
 
 
 int main(int argc, char** argv)
@@ -91,11 +107,11 @@ int main(int argc, char** argv)
   //run on host
   {
     //initialize vertex data
-    std::vector<BFSHost::VertexData> vertexData(nVertices);
+    std::vector<BFS::VertexData> vertexData(nVertices);
     for( int i = 0; i < nVertices; ++i )
       vertexData[i].depth = -1; 
 
-    GASEngineRef<BFSHost> engine;
+    GASEngineRef<BFS> engine;
     engine.setGraph(nVertices, &vertexData[0], srcs.size(), 0, &srcs[0], &dsts[0]);
     engine.setActive(sourceVertex, sourceVertex+1);
     g_iterationCount = 0;
@@ -118,11 +134,11 @@ int main(int argc, char** argv)
   //run on gpu
   {
     //initialize vertex data
-    std::vector<BFSDev::VertexData> vertexData(nVertices);
+    std::vector<BFS::VertexData> vertexData(nVertices);
     for( int i = 0; i < nVertices; ++i )
       vertexData[i].depth = -1; 
 
-    GASEngineGPU<BFSDev> engine;
+    GASEngineGPU<BFS> engine;
     engine.setGraph(nVertices, &vertexData[0], srcs.size(), 0, &srcs[0], &dsts[0]);
     engine.setActive(sourceVertex, sourceVertex+1);
     int iter = 0;
