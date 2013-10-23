@@ -93,16 +93,24 @@ void run(int nVertices, BFS::VertexData* vertexData, int nEdges
 }
 
 
+void outputDepths(int nVertices, BFS::VertexData* vertexData, FILE *f = stdout)
+{
+  for( int i = 0; i < nVertices; ++i )
+    fprintf(f, "%d %d\n", i, vertexData[i].depth);
+}
+
+
 int main(int argc, char** argv)
 {
   char *inputFilename;
+  char *outputFilename = 0;
   int sourceVertex;
   bool runTest;
   bool dumpResults;
-  if( !parseCmdLineSimple(argc, argv, "si-t-d", &inputFilename, &sourceVertex
-    , &runTest, &dumpResults) )
+  if( !parseCmdLineSimple(argc, argv, "si-t-d|s", &inputFilename, &sourceVertex
+    , &runTest, &dumpResults, &outputFilename) )
   {
-    printf("Usage: bfs [-t] [-d] inputfile source\n");
+    printf("Usage: bfs [-t] [-d] inputfile source [outputFilename]\n");
     exit(1);
   }
 
@@ -126,8 +134,7 @@ int main(int argc, char** argv)
     if( dumpResults )
     {
       printf("Reference:\n");
-      for( int i = 0; i < nVertices; ++i )
-        printf("%d %d\n", i, refVertexData[i].depth);
+      outputDepths(nVertices, &refVertexData[0]);
     }
   }
 
@@ -136,8 +143,7 @@ int main(int argc, char** argv)
   if( dumpResults )
   {
     printf("GPU:\n");
-    for( int i = 0; i < nVertices; ++i )
-      printf("%d %d\n", i, vertexData[i].depth);
+    outputDepths(nVertices, &vertexData[0]);
   }
 
   if( runTest )
@@ -156,6 +162,17 @@ int main(int argc, char** argv)
     else
       printf("No differences found\n");
   }
+
+  if( outputFilename )
+  {
+    printf("writing results to %s\n", outputFilename);
+    FILE* f = fopen(outputFilename, "w");
+    outputDepths(nVertices, &vertexData[0], f);
+    fclose(f);
+  }
+
+  free(inputFilename);
+  free(outputFilename);
 
   return 0;
 }

@@ -63,16 +63,24 @@ void run(int nVertices, SSSP::VertexData* vertexData, int nEdges
 }
 
 
+void outputDists(int nVertices, int* dists, FILE* f = stdout)
+{
+  for (int i = 0; i < nVertices; ++i)
+    fprintf(f, "%d %d\n", i, dists[i]);
+}
+
+
 int main(int argc, char** argv)
 {
   char *inputFilename;
+  char *outputFilename = 0;
   int sourceVertex;
   bool runTest;
   bool dumpResults;
-  if( !parseCmdLineSimple(argc, argv, "si-t-d", &inputFilename, &sourceVertex
-    , &runTest, &dumpResults) )
+  if( !parseCmdLineSimple(argc, argv, "si-t-d|s", &inputFilename, &sourceVertex
+    , &runTest, &dumpResults, &outputFilename) )
   {
-    printf("Usage: sssp [-t] [-d] inputfile source\n");
+    printf("Usage: sssp [-t] [-d] inputfile source [outputfile]\n");
     exit(1);
   }
 
@@ -103,9 +111,8 @@ int main(int argc, char** argv)
       , &edgeData[0], &srcs[0], &dsts[0]);
     if( dumpResults )
     {
-      printf("Reference\n");
-      for (int i = 0; i < nVertices; ++i)
-        printf("%d %d\n", i, refVertexData[i]);
+      printf("Reference:\n");
+      outputDists(nVertices, &refVertexData[0]);
     }  
   }
 
@@ -113,8 +120,8 @@ int main(int argc, char** argv)
     , &edgeData[0], &srcs[0], &dsts[0]);
   if( dumpResults )
   {
-    for (int i = 0; i < nVertices; ++i)
-      printf("%d %d\n", i, vertexData[i]);
+    printf("GPU:\n");
+    outputDists(nVertices, &vertexData[0]);
   }
 
   if( runTest )
@@ -133,6 +140,17 @@ int main(int argc, char** argv)
     else
       printf("No differences found\n");
   }
+
+  if( outputFilename )
+  {
+    printf("writing results to %s\n", outputFilename);
+    FILE* f = fopen(outputFilename, "w");
+    outputDists(nVertices, &vertexData[0], f);
+    fclose(f);
+  }
+
+  free(inputFilename);
+  free(outputFilename);
 
   return 0;
 }

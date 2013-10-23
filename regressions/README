@@ -1,0 +1,7 @@
+To run the regressions in this directory, the following steps must be followed:
+
+- Download some graph data for the regressions by running make in 
+  gpugraph/largePerformanceGraphs
+- Build the reference implementations by running make in
+  PowerGraphReferenceImplementations
+- run make in this directory

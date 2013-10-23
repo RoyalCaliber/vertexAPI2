@@ -54,11 +54,11 @@ struct PageRank
 };
 
 
-void outputRanks(int n, const PageRank::VertexData* vertexData)
+void outputRanks(int n, const PageRank::VertexData* vertexData, FILE* f = stdout)
 {
   for( int i = 0; i < n; ++i )
   {
-    printf("%d %f\n", i, vertexData[i].rank);
+    fprintf(f, "%d %f\n", i, vertexData[i].rank);
   }
 }
 
@@ -74,19 +74,24 @@ void run(int nVertices, PageRank::VertexData* vertexData, int nEdges
   engine.setGraph(nVertices, vertexData, nEdges, 0, srcs, dsts);
   //all vertices begin active for pagerank
   engine.setActive(0, nVertices);
+  int64_t t0 = currentTime();
   engine.run();
   engine.getResults();
+  int64_t t1 = currentTime();
+  printf("Took %f ms\n", (t1 - t0)/1000.0f);
 }
 
 
 int main(int argc, char **argv)
 {
   char* inputFilename;
+  char* outputFilename = 0;
   bool runTest;
   bool dumpResults;
-  if( !parseCmdLineSimple(argc, argv, "s-t-d", &inputFilename, &runTest, &dumpResults) )
+  if( !parseCmdLineSimple(argc, argv, "s-t-d|s"
+    , &inputFilename, &runTest, &dumpResults, &outputFilename) )
   {
-    printf("Usage: pagerank [-t] [-d] inputfile\n");
+    printf("Usage: pagerank [-t] [-d] inputfile [outputfile]\n");
     exit(1);
   }
 
@@ -144,6 +149,17 @@ int main(int argc, char **argv)
     else
       printf("No differences found\n");
   }
+
+  if( outputFilename )
+  {
+    FILE* f = fopen(outputFilename, "w");
+    printf("writing results to file %s\n", outputFilename);
+    outputRanks(nVertices, &vertexData[0], f);
+    fclose(f);
+  }
+
+  free(inputFilename);
+  free(outputFilename);
   
   return 0;
 }

@@ -20,6 +20,7 @@ int64_t currentTime();
 //-x: a dash indicates the presence of an optional argument '-x'
 //    anywhere in the command line.  The corresponding bool* argument
 //    is set to 1 if the option is present
+//|:  all positional arguments after the pipe symbol are optional
 int parseCmdLineSimple(int argc, char **argv, const char*fmt, ...);
 
 

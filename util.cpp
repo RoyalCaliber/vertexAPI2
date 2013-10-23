@@ -38,6 +38,7 @@ int parseCmdLineSimple(int argc, char** argv, const char* fmt, ...)
   va_start(args, fmt);
   int iArg = 1;
   bool isOpt = false;
+  bool required = true;
   for( const char *f = fmt; *f; ++f )
   {
     if( isOpt )
@@ -47,14 +48,23 @@ int parseCmdLineSimple(int argc, char** argv, const char* fmt, ...)
     }
     else if( *f == '-' )
       isOpt = true;
+    else if( *f == '|' )
+    {
+      required = false;
+    }
     else
     {
       while( iArg < argc && argv[iArg][0] == '-' )
         ++iArg;
       if( iArg == argc )
       {
-        printf("parseCmdLineSimple: expected argument of type %c\n", *f);
-        return 0;
+        if( required )
+        {
+          printf("parseCmdLineSimple: expected argument of type %c\n", *f);
+          return 0;
+        }
+        else
+          return 1;
       }
       
       switch( *f )
@@ -66,8 +76,8 @@ int parseCmdLineSimple(int argc, char** argv, const char* fmt, ...)
           printf("parseCmdLineSimple: bad format character '%c'\n", *f);
           return 0;
       }
+      ++iArg;
     }
-    ++iArg;
   }
   va_end(args);
   return 1;
