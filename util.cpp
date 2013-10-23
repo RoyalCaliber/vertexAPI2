@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <sys/time.h>
+#include <map>
 
 int64_t currentTime()
 {
@@ -15,25 +16,56 @@ int64_t currentTime()
 
 int parseCmdLineSimple(int argc, char** argv, const char* fmt, ...)
 {
-  int nArgs = strlen(fmt);
-  if( argc != 1 + nArgs )
+  std::map<char, bool> optChars;
+
+  //scan all optional arguments
+  for(int i = 1; i < argc; ++i)
   {
-    printf("parseCmdLineSimple: expected %d arguments, got %d\n", nArgs, argc);
-    exit(1);
+    const char* arg = argv[i];
+    if( arg[0] == '-' )
+    {
+      if( arg[1] == 0 || arg[2] != 0 )
+      {
+        printf("parseCmdLineSimple: invalid option '%s'\n", arg);
+        return 0;
+      }
+      optChars[arg[1]] = true;
+    }
   }
 
+  //now go through positional arguments  
   va_list args;
   va_start(args, fmt);
   int iArg = 1;
+  bool isOpt = false;
   for( const char *f = fmt; *f; ++f )
   {
-    switch( *f )
+    if( isOpt )
     {
-      case 's': *(va_arg(args, char**)) = strdup(argv[iArg]); break;
-      case 'i': *(va_arg(args, int*))   = atoi(argv[iArg]); break;
-      default:
-        printf("parseCmdLineSimple: bad format character '%c'\n", *f);
-        exit(1);
+      isOpt = false;
+      *(va_arg(args, bool*)) = (optChars.find(*f) != optChars.end());
+    }
+    else if( *f == '-' )
+      isOpt = true;
+    else
+    {
+      while( iArg < argc && argv[iArg][0] == '-' )
+        ++iArg;
+      if( iArg == argc )
+      {
+        printf("parseCmdLineSimple: expected argument of type %c\n", *f);
+        return 0;
+      }
+      
+      switch( *f )
+      {
+        case 's': *(va_arg(args, char**)) = strdup(argv[iArg]); break;
+        case 'i': *(va_arg(args, int*))   = atoi(argv[iArg]); break;
+        case 'f': *(va_arg(args, float*)) = atof(argv[iArg]); break;
+        default:
+          printf("parseCmdLineSimple: bad format character '%c'\n", *f);
+          return 0;
+      }
     }
     ++iArg;
   }

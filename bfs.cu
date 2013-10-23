@@ -62,41 +62,49 @@ struct BFS
 };
 
 
-//struct BFSHost : public BFSBase
-//{
-//  static bool apply(VertexData* vert, int dist)
-//  {
-//    if( vert->depth == -1 )
-//    {
-//      vert->depth = g_iterationCount;
-//      return true;
-//    }
-//    return false;
-//  }
-//};
-//
-//
-//struct BFSDev : public BFSBase
-//{
-//  __device__
-//  static bool apply(VertexData* vert, int dist)
-//  {
-//    if( vert->depth == -1 )
-//    {
-//      vert->depth = g_iterationCountGPU;
-//      return true;
-//    }
-//    return false;
-//  }
-//};
+template<bool GPU>
+void setIterationCount(int v)
+{
+  if( GPU )
+    cudaMemcpyToSymbol(g_iterationCountGPU, &v, sizeof(v));
+  else
+    g_iterationCount = v;
+}
+
+
+template<typename Engine, bool GPU>
+void run(int nVertices, BFS::VertexData* vertexData, int nEdges
+  , const int *srcs, const int *dsts, int sourceVertex)
+{
+  Engine engine;
+  engine.setGraph(nVertices, vertexData, nEdges, 0, &srcs[0], &dsts[0]);
+  engine.setActive(sourceVertex, sourceVertex+1);
+  int iter = 0;
+  setIterationCount<GPU>(iter);  
+  while( engine.countActive() )
+  {
+    //run apply without gather
+    engine.gatherApply(false);
+    engine.scatterActivate(false);
+    engine.nextIter();
+    setIterationCount<GPU>(++iter);
+  }
+  engine.getResults();
+}
 
 
 int main(int argc, char** argv)
 {
   char *inputFilename;
   int sourceVertex;
-  if( !parseCmdLineSimple(argc, argv, "si", &inputFilename, &sourceVertex) )
+  bool runTest;
+  bool dumpResults;
+  if( !parseCmdLineSimple(argc, argv, "si-t-d", &inputFilename, &sourceVertex
+    , &runTest, &dumpResults) )
+  {
+    printf("Usage: bfs [-t] [-d] inputfile source\n");
     exit(1);
+  }
 
   //load the graph
   int nVertices;
@@ -104,62 +112,50 @@ int main(int argc, char** argv)
   std::vector<int> dsts;
   loadGraph(inputFilename, nVertices, srcs, dsts);
 
-  //run on host
+  //initialize vertex data
+  std::vector<BFS::VertexData> vertexData(nVertices);
+  for( int i = 0; i < nVertices; ++i )
+    vertexData[i].depth = -1; 
+
+  std::vector<BFS::VertexData> refVertexData;
+  if( runTest )
   {
-    //initialize vertex data
-    std::vector<BFS::VertexData> vertexData(nVertices);
-    for( int i = 0; i < nVertices; ++i )
-      vertexData[i].depth = -1; 
-
-    GASEngineRef<BFS> engine;
-    engine.setGraph(nVertices, &vertexData[0], srcs.size(), 0, &srcs[0], &dsts[0]);
-    engine.setActive(sourceVertex, sourceVertex+1);
-    g_iterationCount = 0;
-    while( engine.countActive() )
+    refVertexData = vertexData;
+    run<GASEngineRef<BFS>, false>(nVertices, &refVertexData[0], (int)srcs.size()
+      , &srcs[0], &dsts[0], sourceVertex);
+    if( dumpResults )
     {
-      //run apply without gather
-      engine.gatherApply(false);
-      engine.scatterActivate(false);
-      engine.nextIter();
-      ++g_iterationCount;
+      printf("Reference:\n");
+      for( int i = 0; i < nVertices; ++i )
+        printf("%d %d\n", i, refVertexData[i].depth);
     }
-    engine.getResults();
+  }
 
-    //output distances;
+  run<GASEngineGPU<BFS>, true>(nVertices, &vertexData[0], (int) srcs.size()
+    , &srcs[0], &dsts[0], sourceVertex);
+  if( dumpResults )
+  {
+    printf("GPU:\n");
     for( int i = 0; i < nVertices; ++i )
       printf("%d %d\n", i, vertexData[i].depth);
   }
 
-
-  //run on gpu
+  if( runTest )
   {
-    //initialize vertex data
-    std::vector<BFS::VertexData> vertexData(nVertices);
+    bool diff = false;
     for( int i = 0; i < nVertices; ++i )
-      vertexData[i].depth = -1; 
-
-    GASEngineGPU<BFS> engine;
-    engine.setGraph(nVertices, &vertexData[0], srcs.size(), 0, &srcs[0], &dsts[0]);
-    engine.setActive(sourceVertex, sourceVertex+1);
-    int iter = 0;
-    cudaMemcpyToSymbol(g_iterationCountGPU, &iter, sizeof(iter));
-    while( engine.countActive() )
     {
-      //run apply without gather
-      engine.gatherApply(false);
-      engine.scatterActivate(false);
-      engine.nextIter();
-      ++iter;
-      cudaMemcpyToSymbol(g_iterationCountGPU, &iter, sizeof(iter));
+      if( vertexData[i].depth != refVertexData[i].depth )
+      {
+        printf("%d %d %d\n", i, refVertexData[i].depth, vertexData[i].depth);
+        diff = true;
+      }
     }
-    engine.getResults();
-
-    //output distances;
-    for( int i = 0; i < nVertices; ++i )
-      printf("%d %d\n", i, vertexData[i].depth);
+    if( diff )
+      return 1;
+    else
+      printf("No differences found\n");
   }
 
-
-
-    
+  return 0;
 }

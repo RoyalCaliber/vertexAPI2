@@ -63,11 +63,32 @@ void outputRanks(int n, const PageRank::VertexData* vertexData)
 }
 
 
+template<typename Engine>
+void run(int nVertices, PageRank::VertexData* vertexData, int nEdges
+  , const int* srcs, const int* dsts)
+{
+  for( int i = 0; i < nVertices; ++i )
+    vertexData[i].rank = PageRank::pageConst;
+
+  Engine engine;
+  engine.setGraph(nVertices, vertexData, nEdges, 0, srcs, dsts);
+  //all vertices begin active for pagerank
+  engine.setActive(0, nVertices);
+  engine.run();
+  engine.getResults();
+}
+
+
 int main(int argc, char **argv)
 {
   char* inputFilename;
-  if( !parseCmdLineSimple(argc, argv, "s", &inputFilename) )
+  bool runTest;
+  bool dumpResults;
+  if( !parseCmdLineSimple(argc, argv, "s-t-d", &inputFilename, &runTest, &dumpResults) )
+  {
+    printf("Usage: pagerank [-t] [-d] inputfile\n");
     exit(1);
+  }
 
   //load the graph
   int nVertices;
@@ -85,33 +106,45 @@ int main(int argc, char **argv)
   std::vector<PageRank::VertexData> vertexData(nVertices);
   for( int i = 0; i < nVertices; ++i )
     vertexData[i].numOutEdges = srcOffsets[i + 1] - srcOffsets[i];
-    
-  //instantiate and run the engine to completion
-  {
-    for( int i = 0; i < nVertices; ++i )
-      vertexData[i].rank = PageRank::pageConst;
 
-    GASEngineRef<PageRank> engine;
-    engine.setGraph(nVertices, &vertexData[0], srcs.size(), 0, &srcs[0], &dsts[0]);
-    //all vertices begin active for pagerank
-    engine.setActive(0, nVertices);
-    engine.run();
-    engine.getResults();
-    printf("Reference:\n");
-    outputRanks(nVertices, &vertexData[0]);
+  std::vector<PageRank::VertexData> refVertexData;
+  if( runTest )
+  {
+    printf("Running reference calculation\n");
+    refVertexData = vertexData;
+    run< GASEngineRef<PageRank> >(nVertices, &refVertexData[0], (int)srcs.size(), &srcs[0], &dsts[0]);
+    if( dumpResults )
+    {
+      printf("Reference\n");
+      outputRanks(nVertices, &refVertexData[0]);
+    }
   }
 
+  run< GASEngineGPU<PageRank> >(nVertices, &vertexData[0], (int)srcs.size(), &srcs[0], &dsts[0]);
+  if( dumpResults )
   {
-    //Repeat the calculation with the GPU engine
-    for( int i = 0; i < nVertices; ++i )
-      vertexData[i].rank = PageRank::pageConst;
-    GASEngineGPU<PageRank> engine;
-    engine.setGraph(nVertices, &vertexData[0], srcs.size(), 0, &srcs[0], &dsts[0]);
-    engine.setActive(0, nVertices);
-    engine.run();
-    engine.getResults();
     printf("GPU:\n");
     outputRanks(nVertices, &vertexData[0]);
   }
+
+  if( runTest )
+  {
+    const float tol = 1.0e-6f;
+    bool diff = false;
+    for( int i = 0; i < nVertices; ++i )
+    {
+      if( fabs(vertexData[i].rank - refVertexData[i].rank) > tol )
+      {
+        printf("%d %f %f\n", i, refVertexData[i].rank, vertexData[i].rank);
+        diff = true;
+      }
+    }
+    if( diff )
+      return 1;
+    else
+      printf("No differences found\n");
+  }
+  
+  return 0;
 }
 

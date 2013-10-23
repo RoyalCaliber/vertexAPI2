@@ -8,20 +8,13 @@
 
 struct SSSP
 {
-  struct VertexData
-  {
-    int dist;
-  };
-
-
-  struct EdgeData
-  {
-    int length;
-  };
-
+  //making these typedefs rather than singleton structs
+  typedef int VertexData;
+  typedef int EdgeData;
 
   typedef int GatherResult;
-  static const int gatherZero = INT_MAX - 100000; //this should be set to nVertices + 1
+  static const int maxLength = 100000;
+  static const int gatherZero = INT_MAX - maxLength;
 
 
   __host__ __device__
@@ -32,17 +25,17 @@ struct SSSP
 
 
   __host__ __device__
-  static int gatherMap(const VertexData* dst, const VertexData *src, const EdgeData* edge)
+  static int gatherMap(const VertexData* dstDist, const VertexData *srcDist, const EdgeData* edgeLen)
   {
-    return src->dist + edge->length;
+    return *srcDist + *edgeLen;
   }
 
 
   __host__ __device__
-  static bool apply(VertexData* vert, int dist)
+  static bool apply(VertexData* curDist, GatherResult dist)
   {
-    bool changed = dist < vert->dist;
-    vert->dist = min(vert->dist, dist);
+    bool changed = dist < *curDist;
+    *curDist = min(*curDist, dist);
     return changed;
   }
 
@@ -55,64 +48,91 @@ struct SSSP
 };
 
 
+template<typename Engine>
+void run(int nVertices, SSSP::VertexData* vertexData, int nEdges
+  , SSSP::EdgeData* edgeData, const int* srcs, const int* dsts)
+{
+    Engine engine;
+    engine.setGraph(nVertices, vertexData, nEdges, edgeData, srcs, dsts);
+
+    //TODO, setting all vertices to active for first step works, but it would
+    //be faster to instead set to neighbors of starting vertex
+    engine.setActive(0, nVertices);
+    engine.run();
+    engine.getResults();
+}
+
+
 int main(int argc, char** argv)
 {
   char *inputFilename;
   int sourceVertex;
-  if( !parseCmdLineSimple(argc, argv, "si", &inputFilename, &sourceVertex) )
+  bool runTest;
+  bool dumpResults;
+  if( !parseCmdLineSimple(argc, argv, "si-t-d", &inputFilename, &sourceVertex
+    , &runTest, &dumpResults) )
+  {
+    printf("Usage: sssp [-t] [-d] inputfile source\n");
     exit(1);
+  }
 
   //load the graph
   int nVertices;
   std::vector<int> srcs;
   std::vector<int> dsts;
-  std::vector<int> edge_data;
-  loadGraph(inputFilename, nVertices, srcs, dsts, &edge_data);
-
-  //initialize vertex data
-  std::vector<SSSP::VertexData> vertexData(nVertices);
-
+  std::vector<int> edgeData;
+  loadGraph(inputFilename, nVertices, srcs, dsts, &edgeData);
+  if( edgeData.size() == 0 )
   {
-    for( int i = 0; i < nVertices; ++i ) {
-      if (i != sourceVertex)
-        vertexData[i].dist = nVertices + 1; //larger than max diameter
-      else
-        vertexData[i].dist = 0;
-    }
-
-    GASEngineRef<SSSP> engine;
-    engine.setGraph(nVertices, &vertexData[0], srcs.size(), (SSSP::EdgeData *)&edge_data[0], &srcs[0], &dsts[0]);
-
-    //TODO, setting all vertices to active for first step works, but it would
-    //be faster to instead set to neighbors of starting vertex
-    engine.setActive(0, nVertices);
-    engine.run();
-    engine.getResults();
-
-    //output distances;
-    for (int i = 0; i < nVertices; ++i)
-      printf("%d %d\n", i, vertexData[i].dist);
+    printf("No edge data available in input file\n");
+    exit(1);
   }
 
-   {
-    for( int i = 0; i < nVertices; ++i ) {
-      if (i != sourceVertex)
-        vertexData[i].dist = nVertices + 1; //larger than max diameter
-      else
-        vertexData[i].dist = 0;
-    }
+  //initialize vertex data
+  std::vector<int> vertexData(nVertices);
+  for( int i = 0; i < nVertices; ++i )
+    vertexData[i] = SSSP::gatherZero;
+  vertexData[sourceVertex] = 0;
 
-    GASEngineGPU<SSSP> engine;
-    engine.setGraph(nVertices, &vertexData[0], srcs.size(), (SSSP::EdgeData *)&edge_data[0], &srcs[0], &dsts[0]);
+  std::vector<int> refVertexData;
+  if( runTest )
+  {
+    printf("Running reference calculation\n");
+    refVertexData = vertexData;
+    run< GASEngineRef<SSSP> >(nVertices, &refVertexData[0], (int)srcs.size()
+      , &edgeData[0], &srcs[0], &dsts[0]);
+    if( dumpResults )
+    {
+      printf("Reference\n");
+      for (int i = 0; i < nVertices; ++i)
+        printf("%d %d\n", i, refVertexData[i]);
+    }  
+  }
 
-    //TODO, setting all vertices to active for first step works, but it would
-    //be faster to instead set to neighbors of starting vertex
-    engine.setActive(0, nVertices);
-    engine.run();
-    engine.getResults();
-
-    //output distances;
+  run< GASEngineGPU<SSSP> >(nVertices, &vertexData[0], (int)srcs.size()
+    , &edgeData[0], &srcs[0], &dsts[0]);
+  if( dumpResults )
+  {
     for (int i = 0; i < nVertices; ++i)
-      printf("%d %d\n", i, vertexData[i].dist);
-   }
+      printf("%d %d\n", i, vertexData[i]);
+  }
+
+  if( runTest )
+  {
+    bool diff = false;
+    for( int i = 0; i < nVertices; ++i )
+    {
+      if( vertexData[i] != refVertexData[i] )
+      {
+        printf("%d %d %d\n", i, refVertexData[i], vertexData[i]);
+        diff = true;
+      }
+    }
+    if( diff )
+      return 1;
+    else
+      printf("No differences found\n");
+  }
+
+  return 0;
 }

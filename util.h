@@ -13,6 +13,13 @@ int64_t currentTime();
 
 //extract arguments from the command line, useful for very simple
 //command lines
+//The format string is a sequence of one letter characters:
+//s: string argument (returned via strdup, to be freed with free)
+//i: integer
+//f: float
+//-x: a dash indicates the presence of an optional argument '-x'
+//    anywhere in the command line.  The corresponding bool* argument
+//    is set to 1 if the option is present
 int parseCmdLineSimple(int argc, char **argv, const char*fmt, ...);
 
 
