@@ -4,7 +4,7 @@ GRAPH_DIR = ../../largePerformanceGraphs
 GRAPHS = ak2010 belgium_osm delaunay_n13 coAuthorsDBLP delaunay_n21 webbase-1M #soc-LiveJournal1 kron_g500-logn21
 
 #which algorithms to check
-ALGORITHMS = pagerank #sssp bfs
+ALGORITHMS = pagerank sssp bfs
 
 #location of reference implementations
 PG_REF_DIR = ../../vertexAPI/PowerGraphReferenceImplementations
@@ -49,24 +49,24 @@ endef
 	$(call MAKEGOLD,$*,sssp)
 
 %.sssp.test: ../sssp
-	../sssp $(GRAPH_DIR)/$*/$*.mtx __tmp$* | awk '/Took/{print $$2}' > $*.sssp.timing_gpu
+	../sssp -m $(GRAPH_DIR)/$*/$*.mtx 0 __tmp$* | awk '/Took/{print $$2}' > $*.sssp.timing_gpu
 	sort -n __tmp$* > $@
 	rm -f __tmp$*
 
 %.sssp.pass: %.sssp.test %.sssp.gold
-	diff -q $*.sssp.test $*.sssp.gold
+	./checkDist.py $*.sssp.test $*.sssp.gold
 	touch $*.sssp.pass
 
 %.bfs.gold: $(PG_REF_DIR)/bfs.x
 	$(call MAKEGOLD,$*,bfs)
 
 %.bfs.test: ../bfs
-	../bfs $(GRAPH_DIR)/$*/$*.mtx __tmp$* | awk '/Took/{print $$2}' > $*.bfs.timing_gpu
+	../bfs -m $(GRAPH_DIR)/$*/$*.mtx 0 __tmp$* | awk '/Took/{print $$2}' > $*.bfs.timing_gpu
 	sort -n __tmp$* > $@
 	rm -f __tmp$*
 
 %.bfs.pass: %.bfs.test %.bfs.gold
-	diff -q $*.bfs.test $*.bfs.gold
+	./checkDist.py $*.bfs.test $*.bfs.gold
 	touch $*.bfs.pass
 
 clean:

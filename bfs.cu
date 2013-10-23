@@ -80,7 +80,8 @@ void run(int nVertices, BFS::VertexData* vertexData, int nEdges
   engine.setGraph(nVertices, vertexData, nEdges, 0, &srcs[0], &dsts[0]);
   engine.setActive(sourceVertex, sourceVertex+1);
   int iter = 0;
-  setIterationCount<GPU>(iter);  
+  setIterationCount<GPU>(iter);
+  int64_t t0 = currentTime();
   while( engine.countActive() )
   {
     //run apply without gather
@@ -90,6 +91,8 @@ void run(int nVertices, BFS::VertexData* vertexData, int nEdges
     setIterationCount<GPU>(++iter);
   }
   engine.getResults();
+  int64_t t1 = currentTime();
+  printf("Took %f ms\n", (t1 - t0)/1000.0f);
 }
 
 
@@ -107,10 +110,11 @@ int main(int argc, char** argv)
   int sourceVertex;
   bool runTest;
   bool dumpResults;
-  if( !parseCmdLineSimple(argc, argv, "si-t-d|s", &inputFilename, &sourceVertex
-    , &runTest, &dumpResults, &outputFilename) )
+  bool useMaxOutDegreeStart;
+  if( !parseCmdLineSimple(argc, argv, "si-t-d-m|s", &inputFilename, &sourceVertex
+    , &runTest, &dumpResults, &useMaxOutDegreeStart, &outputFilename) )
   {
-    printf("Usage: bfs [-t] [-d] inputfile source [outputFilename]\n");
+    printf("Usage: bfs [-t] [-d] [-m] inputfile source [outputFilename]\n");
     exit(1);
   }
 
@@ -123,8 +127,28 @@ int main(int argc, char** argv)
   //initialize vertex data
   std::vector<BFS::VertexData> vertexData(nVertices);
   for( int i = 0; i < nVertices; ++i )
-    vertexData[i].depth = -1; 
+    vertexData[i].depth = -1;
 
+  if( useMaxOutDegreeStart )
+  {
+    //convert to CSR layout to find source vertex
+    std::vector<int> srcOffsets(nVertices + 1);
+    std::vector<int> csrSrcs(srcs.size());
+    edgeListToCSR<int>(nVertices, srcs.size(), &srcs[0], &dsts[0], &srcOffsets[0], 0, 0);
+    int maxDegree = -1;
+    sourceVertex = -1;
+    for(int i = 0; i < nVertices; ++i)
+    {
+      int outDegree = srcOffsets[i + 1] - srcOffsets[i];
+      if( outDegree > maxDegree )
+      {
+        maxDegree    = outDegree;
+        sourceVertex = i;
+      }
+    }
+    printf("using vertex %d with degree %d as source\n", sourceVertex, maxDegree);
+  }  
+    
   std::vector<BFS::VertexData> refVertexData;
   if( runTest )
   {

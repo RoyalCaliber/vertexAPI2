@@ -52,14 +52,17 @@ template<typename Engine>
 void run(int nVertices, SSSP::VertexData* vertexData, int nEdges
   , SSSP::EdgeData* edgeData, const int* srcs, const int* dsts)
 {
-    Engine engine;
-    engine.setGraph(nVertices, vertexData, nEdges, edgeData, srcs, dsts);
+  Engine engine;
+  engine.setGraph(nVertices, vertexData, nEdges, edgeData, srcs, dsts);
 
-    //TODO, setting all vertices to active for first step works, but it would
-    //be faster to instead set to neighbors of starting vertex
-    engine.setActive(0, nVertices);
-    engine.run();
-    engine.getResults();
+  //TODO, setting all vertices to active for first step works, but it would
+  //be faster to instead set to neighbors of starting vertex
+  engine.setActive(0, nVertices);
+  int64_t t0 = currentTime();
+  engine.run();
+  engine.getResults();
+  int64_t t1 = currentTime();
+  printf("Took %f ms\n", (t1 - t0)/1000.0f);
 }
 
 
@@ -77,10 +80,11 @@ int main(int argc, char** argv)
   int sourceVertex;
   bool runTest;
   bool dumpResults;
-  if( !parseCmdLineSimple(argc, argv, "si-t-d|s", &inputFilename, &sourceVertex
-    , &runTest, &dumpResults, &outputFilename) )
+  bool useMaxOutDegreeStart;
+  if( !parseCmdLineSimple(argc, argv, "si-t-d-m|s", &inputFilename, &sourceVertex
+    , &runTest, &dumpResults, &useMaxOutDegreeStart, &outputFilename) )
   {
-    printf("Usage: sssp [-t] [-d] inputfile source [outputfile]\n");
+    printf("Usage: sssp [-t] [-d] [-m] inputfile source [outputfile]\n");
     exit(1);
   }
 
@@ -95,6 +99,27 @@ int main(int argc, char** argv)
     printf("No edge data available in input file\n");
     exit(1);
   }
+
+  if( useMaxOutDegreeStart )
+  {
+    //convert to CSR layout to find source vertex
+    std::vector<int> srcOffsets(nVertices + 1);
+    std::vector<int> csrSrcs(srcs.size());
+    edgeListToCSR<int>(nVertices, srcs.size(), &srcs[0], &dsts[0], &srcOffsets[0], 0, 0);
+    int maxDegree = -1;
+    sourceVertex = -1;
+    for(int i = 0; i < nVertices; ++i)
+    {
+      int outDegree = srcOffsets[i + 1] - srcOffsets[i];
+      if( outDegree > maxDegree )
+      {
+        maxDegree    = outDegree;
+        sourceVertex = i;
+      }
+    }
+    printf("using vertex %d with degree %d as source\n", sourceVertex, maxDegree);
+  }
+  
 
   //initialize vertex data
   std::vector<int> vertexData(nVertices);
