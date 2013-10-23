@@ -28,7 +28,7 @@ regress: $(REGRESSIONS)
 
 define MAKEGOLD
   rm -f __$(1).$(2).out* ;
-  $(PG_REF_DIR)/$(2).x --graph $(GRAPH_DIR)/$(1)/$(1).mtx --graph_opts ingress=batch --save __$(1).$(2).out | awk '/Finished Running/{print $$5}' > $(1).$(2).timing ; 
+  $(PG_REF_DIR)/$(2).x $(POWERGRAPH_OPTS) --graph $(GRAPH_DIR)/$(1)/$(1).mtx --graph_opts ingress=batch --save __$(1).$(2).out | awk '/Finished Running/{print $$5}' > $(1).$(2).timing ; 
   cat __$(1).$(2).out* | sort -n > $(1).$(2).gold ;
   rm -f __$(1).$(2).out* ;
 endef
