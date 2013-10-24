@@ -1,0 +1,76 @@
+********************************************************************************
+*     THIS IS A WORK IN PROGRESS.  DO NOT USE THIS FOR PRODUCTION WORK         *
+********************************************************************************
+
+VertexAPI2
+==========
+
+
+Introduction
+------------
+
+VertexAPI2 is a CUDA/C++ library for developing large graph analytics. The goal
+is to hide the complexity of GPU programming while presenting a simple API.
+VertexAPI2 uses the Gather-Apply-Scatter model used in GraphLab [cite].
+
+VertexAPI2 is a work in progress. At this time we have a few working examples
+like breadth first search, single source shortest paths and Page rank. The API
+changes constantly as we evaluate and understand the best way to develop
+further. If you are interested in using our project in your own work, please
+send an email to the authors.
+
+
+Known Issues
+------------
+
+The moderngpu library uses only one dimensional grids and consequently this
+code will fail on Fermi cards for graphs with more than 8.3 million edges.
+
+
+Installation
+------------
+
+The API is available as header files in the vertexAPI2 directory. To build the
+example programs and a few utility objects, run 'make' in the vertexAPI2
+directory.
+
+Notes:
+- A working installation of CUDA >= 5.0 is required.
+- The moderngpu library should be available alongside the vertexAPI2 directory
+  (mgpu patches to be made public on our repo?)
+
+
+Building GraphLab regressions
+-----------------------------
+
+To perform a regression test against GraphLab, a working installation of
+GraphLab is required. Edit the file
+    vertexAPI2/PowerGraphReferenceImplementations/Makefile
+to reflect the location of GraphLab on your system and then run 'make'
+in the PowerGraphReferenceImplementations directory.  To download some
+test graphs, run 'make' in the test-graphs directory.  Finally run 'make'
+in the regressions directory.  At the end you can run './report.py' to
+summarize the timing comparisons between GraphLab and vertexAPI2.
+
+
+Credits:
+--------
+
+VertexAPI2 is developed by Royal Caliber LLC. as part of the DARPA XDATA
+program under AFRL contract [enter contract number(s)].
+
+Developers:
+  Erich Elsen, Royal Caliber LLC, erich@royal-caliber.com
+  Vishal Vaidyanathan, Royal Caliber LLC, vishal@royal-caliber.com
+
+Contributors:
+  John Owens, UC Davis
+  Yangzihao Wang, UC Davis
+
+Acknowledgements:
+  Sean Baxter, NVIDIA for the moderngpu library
+  Duane Merrill, NVIDIA for the CUB library
+  Joseph Gonzalez, Berkeley, for many informative discussions about the GAS
+     abstraction and GraphLab.
+
+

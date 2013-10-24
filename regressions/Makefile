@@ -1,4 +1,4 @@
-GRAPH_DIR = ../../largePerformanceGraphs
+GRAPH_DIR = ../test-graphs
 
 #Can restrict this to the graphs you have downloaded
 GRAPHS = ak2010 belgium_osm delaunay_n13 coAuthorsDBLP delaunay_n21 webbase-1M #soc-LiveJournal1 kron_g500-logn21
@@ -7,7 +7,7 @@ GRAPHS = ak2010 belgium_osm delaunay_n13 coAuthorsDBLP delaunay_n21 webbase-1M #
 ALGORITHMS = pagerank sssp bfs
 
 #location of reference implementations
-PG_REF_DIR = ../../vertexAPI/PowerGraphReferenceImplementations
+PG_REF_DIR = ../PowerGraphReferenceImplementations
 
 #Match this to number of cores on your system
 POWERGRAPH_OPTS = --ncpus 4
