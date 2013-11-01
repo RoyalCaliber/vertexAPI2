@@ -44,4 +44,9 @@ int loadGraph( const char* fname
   , std::vector<int> &dsts
   , std::vector<int> *edgeValues = 0);
 
+
+//utility data loader, used for loading out-degree in pagerank and bfs
+//with C++11, we can do a multi-column templated version if useful.
+int loadData( const char* fname, std::vector<int> &data, char comment='#' );
+
 #endif

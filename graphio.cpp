@@ -282,4 +282,38 @@ int loadGraph( const char* fname
 }
 
 
+int loadData( const char* fname, std::vector<int> &data, char comment )
+{
+  gzFile f = openFile( fname );
+  int lineNum = 0;
+  while( !gzeof(f) )
+  {
+    char buffer[1024];
+    lineNum++;
+    if( !gzgets( f, buffer, sizeof(buffer) ) )
+    {
+      int err;
+      gzerror( f, &err );
+      if( err )
+      {
+        cerr << "gz error " << err << " at line " << lineNum << endl;
+        exit(1);
+      }
+      else
+        continue;
+    }
+    if( buffer[0] != comment )
+    {
+      char *endp;
+      long ret = strtol(buffer, &endp, 0);
+      if( *endp && !isspace(*endp) )
+      {
+        cerr << "unable to convert '" << buffer << "' to integer" << endl;
+        exit(1);
+      }
+      data.push_back(ret);
+    }
+  }
+  gzclose(f);  
+}
 

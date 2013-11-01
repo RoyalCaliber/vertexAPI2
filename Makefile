@@ -2,8 +2,8 @@ NVCC = nvcc
 MGPU_PATH = ../moderngpu
 #NVCC_OPTS = -O3 --restrict -Xptxas -dlcm=cg -I$(MGPU_PATH)/include -L$(MGPU_PATH)
 NVCC_OPTS = -g -I$(MGPU_PATH)/include -L$(MGPU_PATH)
-NVCC_ARCHS = -gencode arch=compute_20,code=sm_20 -gencode arch=compute_30,code=sm_30
-LD_LIBS = -lz -lmgpu
+NVCC_ARCHS = -gencode arch=compute_20,code=sm_20 #-gencode arch=compute_30,code=sm_30
+LD_LIBS = -lz -lmgpu -lmpich
 
 
 #The rules need to be cleaned up, but we're probably going to use cmake, so
@@ -11,7 +11,7 @@ LD_LIBS = -lz -lmgpu
 
 HEADERS = graphio.h util.h refgas.h gpugas.h gpugas_kernels.cuh
 
-BINARIES = pagerank sssp bfs
+BINARIES = pagerank #sssp bfs
 
 all: $(BINARIES)
 

@@ -1,28 +1,22 @@
-/******************************************************************************
-Copyright 2013 Royal Caliber LLC. (http://www.royal-caliber.com)
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-******************************************************************************/
-
 #ifndef REFGAS_H__
 #define REFGAS_H__
 
 #include <vector>
 #include <stdio.h>
 
+#ifdef VERTEXAPI_USE_MPI
+#include <mpi.h>
+#endif
+
+
 //Reference implementation, useful for correctness checking
 //and prototyping interfaces.
 //This is not an optimized CPU implementation.
+
+
+//Doing a first-pass MPI implementation.  This is not likely
+//to be scalable to more than a few nodes, but helps us solve
+//some API questions for the scalable version.
 
 
 template<typename Program
@@ -54,6 +48,12 @@ class GASEngineRef
   std::vector<Int>  m_applyRet;
   std::vector<bool> m_activeFlags;
 
+  #ifdef VERTEXAPI_USE_MPI
+  int          m_mpiRank;
+  MPI_Datatype m_mpiGatherResultType;
+  MPI_Op       m_mpiReduceOp;
+  #endif
+
   public:
     GASEngineRef()
       : m_nVertices(0)
@@ -62,6 +62,36 @@ class GASEngineRef
 
 
     ~GASEngineRef(){}
+
+
+    #ifdef VERTEXAPI_USE_MPI
+    //wrap Program::gatherReduce for MPI
+    static void mpiReduce(const GatherResult *in
+      , GatherResult* inout
+      , const int *len
+      , MPI_Datatype *type)
+    {
+      for( int i = 0; i < *len; ++i )
+        inout[i] = Program::gatherReduce(inout[i], in[i]);
+    }
+
+
+    void initMPI()
+    {
+      //errcheck needed
+      MPI_Comm_rank(MPI_COMM_WORLD, &m_mpiRank);
+      
+      //This assumes the same endianness, word size and packing for all
+      //processes. Otherwise we need some help from the end user in defining the
+      //MPI_Datatype corresponding to Program::GatherResult
+      //This means: use the same compiler, same 32/64-bitness and same architecture
+      //on all processes for this to work.
+      MPI_Type_contiguous(sizeof(GatherResult), MPI_CHAR, &m_mpiGatherResultType);
+      MPI_Type_commit(&m_mpiGatherResultType);
+      
+      MPI_Op_create((MPI_User_function*) mpiReduce, Program::Commutative, &m_mpiReduceOp);
+    }
+    #endif
 
   
     //initialize the graph data structures for the GPU
@@ -140,6 +170,11 @@ class GASEngineRef
 
     void gatherApply(bool haveGather=true)
     {
+      //the temporary gather results are now nVertices sized,
+      //where nVertices is the total number of vertices across all nodes
+      m_gatherResults.clear();
+      m_gatherResults.resize(m_nVertices, Program::gatherZero);
+      
       for( Int i = 0; i < m_active.size(); ++i )
       {
         Int dv = m_active[i];
@@ -153,14 +188,29 @@ class GASEngineRef
             , m_vertexData + src, m_edgeData + m_edgeIndexCSC[ie]);
           sum = Program::gatherReduce(sum, tmp);
         }
-        m_gatherResults[i] = sum;
+        m_gatherResults[dv] = sum;
       }
+
+      #ifdef VERTEXAPI_USE_MPI
+      for( Int i = 0; i < m_nVertices; ++i )
+      {
+        printf("%d %d %f\n", m_mpiRank, i, m_gatherResults[i]);
+      }
+      printf("finished pre\n");
+      MPI_Barrier(MPI_COMM_WORLD);
+      MPI_Allreduce(MPI_IN_PLACE, &m_gatherResults[0], m_nVertices
+        , m_mpiGatherResultType, m_mpiReduceOp, MPI_COMM_WORLD);
+      for( Int i = 0; i < m_nVertices; ++i )
+      {
+        printf("after %d %d %f\n", m_mpiRank, i, m_gatherResults[i]);
+      }
+      #endif
 
       //separate loop to keep bulk synchronous
       for( Int i = 0; i < m_active.size(); ++i )
       {
         Int dv = m_active[i];
-        m_applyRet[i] = Program::apply(m_vertexData + dv, m_gatherResults[i]);
+        m_applyRet[i] = Program::apply(m_vertexData + dv, m_gatherResults[dv]);
       }
     }
 

@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ******************************************************************************/
 
+//this should come from the Makefile, putting it in here for testing
+#define VERTEXAPI_USE_MPI
 
 #include "refgas.h"
 #include "gpugas.h"
@@ -39,6 +41,8 @@ struct PageRank
   typedef float GatherResult;
 
   static const float gatherZero = 0.0f;
+
+  enum { Commutative = true };
 
   __host__ __device__
   static float gatherMap(const VertexData* dst, const VertexData* src, const EdgeData* edge)
@@ -84,11 +88,11 @@ template<typename Engine>
 void run(int nVertices, PageRank::VertexData* vertexData, int nEdges
   , const int* srcs, const int* dsts)
 {
-  for( int i = 0; i < nVertices; ++i )
-    vertexData[i].rank = PageRank::pageConst;
-
   Engine engine;
   engine.setGraph(nVertices, vertexData, nEdges, 0, srcs, dsts);
+  #ifdef VERTEXAPI_USE_MPI
+    engine.initMPI();
+  #endif
   //all vertices begin active for pagerank
   engine.setActive(0, nVertices);
   int64_t t0 = currentTime();
@@ -101,14 +105,22 @@ void run(int nVertices, PageRank::VertexData* vertexData, int nEdges
 
 int main(int argc, char **argv)
 {
+  int mpiRank = 0;
+
+  #ifdef VERTEXAPI_USE_MPI
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &mpiRank);
+  #endif
+  
   char* inputFilename;
+  char* inputDegreeFilename;
   char* outputFilename = 0;
   bool runTest;
   bool dumpResults;
-  if( !parseCmdLineSimple(argc, argv, "s-t-d|s"
-    , &inputFilename, &runTest, &dumpResults, &outputFilename) )
+  if( !parseCmdLineSimple(argc, argv, "ss-t-d|s"
+    , &inputFilename, &inputDegreeFilename, &runTest, &dumpResults, &outputFilename) )
   {
-    printf("Usage: pagerank [-t] [-d] inputfile [outputfile]\n");
+    printf("Usage: pagerank [-t] [-d] inputEdges inputDegrees [outputfile]\n");
     exit(1);
   }
 
@@ -116,8 +128,28 @@ int main(int argc, char **argv)
   int nVertices;
   std::vector<int> srcs;
   std::vector<int> dsts;
-  loadGraph(inputFilename, nVertices, srcs, dsts);
-  printf("loaded %s with %d vertices and %zd edges\n", inputFilename, nVertices, srcs.size());
+  #ifdef VERTEXAPI_USE_MPI
+    char rankStr[8];
+    snprintf(rankStr, sizeof(rankStr), "_%d", mpiRank);
+    std::string tmp = inputFilename;
+    tmp += rankStr;
+    loadGraph(tmp.c_str(), nVertices, srcs, dsts);
+    printf("%d: loaded %zd edges\n", mpiRank, srcs.size());
+  #else
+    loadGraph(inputFilename, nVertices, srcs, dsts);
+    printf("loaded %s with %d vertices and %zd edges\n", inputFilename, nVertices, srcs.size());
+  #endif
+
+  //read in the out-degree for the vertices
+  std::vector<int> outDegrees;
+  loadData(inputDegreeFilename, outDegrees);
+
+  //Get the actual number of vertices
+  #ifdef VERTEXAPI_USE_MPI
+    MPI_Barrier(MPI_COMM_WORLD);
+    MPI_Allreduce(MPI_IN_PLACE, &nVertices, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+    printf("%d: nVertices = %d\n", mpiRank, nVertices);
+  #endif
 
   //initialize vertex data
   //convert to CSR to get the count of edges.
@@ -127,8 +159,11 @@ int main(int argc, char **argv)
   
   std::vector<PageRank::VertexData> vertexData(nVertices);
   for( int i = 0; i < nVertices; ++i )
-    vertexData[i].numOutEdges = srcOffsets[i + 1] - srcOffsets[i];
-
+  {
+    vertexData[i].numOutEdges = outDegrees[i]; //srcOffsets[i + 1] - srcOffsets[i];
+    vertexData[i].rank = PageRank::pageConst;
+  }
+  
   std::vector<PageRank::VertexData> refVertexData;
   if( runTest )
   {
@@ -142,12 +177,12 @@ int main(int argc, char **argv)
     }
   }
 
-  run< GASEngineGPU<PageRank> >(nVertices, &vertexData[0], (int)srcs.size(), &srcs[0], &dsts[0]);
-  if( dumpResults )
-  {
-    printf("GPU:\n");
-    outputRanks(nVertices, &vertexData[0]);
-  }
+//  run< GASEngineGPU<PageRank> >(nVertices, &vertexData[0], (int)srcs.size(), &srcs[0], &dsts[0]);
+//  if( dumpResults )
+//  {
+//    printf("GPU:\n");
+//    outputRanks(nVertices, &vertexData[0]);
+//  }
 
   if( runTest )
   {
@@ -167,7 +202,7 @@ int main(int argc, char **argv)
       printf("No differences found\n");
   }
 
-  if( outputFilename )
+  if( outputFilename && mpiRank == 0 )
   {
     FILE* f = fopen(outputFilename, "w");
     printf("writing results to file %s\n", outputFilename);
@@ -177,6 +212,10 @@ int main(int argc, char **argv)
 
   free(inputFilename);
   free(outputFilename);
+
+  #ifdef VERTEXAPI_USE_MPI
+    MPI_Finalize();
+  #endif
   
   return 0;
 }
