@@ -111,6 +111,12 @@ int main(int argc, char **argv)
     MPI_Init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &mpiRank);
   #endif
+
+  #ifdef VERTEXAPI_USE_MPI
+    #define MASTER (mpiRank == 0)
+  #else
+    #define MASTER (1)
+  #endif
   
   char* inputFilename;
   char* inputDegreeFilename;
@@ -150,17 +156,11 @@ int main(int argc, char **argv)
     MPI_Allreduce(MPI_IN_PLACE, &nVertices, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
     printf("%d: nVertices = %d\n", mpiRank, nVertices);
   #endif
-
-  //initialize vertex data
-  //convert to CSR to get the count of edges.
-  std::vector<int> srcOffsets(nVertices + 1);
-  std::vector<int> csrSrcs(srcs.size());
-  edgeListToCSR<int>(nVertices, srcs.size(), &srcs[0], &dsts[0], &srcOffsets[0], 0, 0);
   
   std::vector<PageRank::VertexData> vertexData(nVertices);
   for( int i = 0; i < nVertices; ++i )
   {
-    vertexData[i].numOutEdges = outDegrees[i]; //srcOffsets[i + 1] - srcOffsets[i];
+    vertexData[i].numOutEdges = outDegrees[i];
     vertexData[i].rank = PageRank::pageConst;
   }
   
@@ -170,21 +170,30 @@ int main(int argc, char **argv)
     printf("Running reference calculation\n");
     refVertexData = vertexData;
     run< GASEngineRef<PageRank> >(nVertices, &refVertexData[0], (int)srcs.size(), &srcs[0], &dsts[0]);
-    if( dumpResults )
+    if( MASTER && dumpResults )
     {
       printf("Reference\n");
       outputRanks(nVertices, &refVertexData[0]);
     }
   }
 
-//  run< GASEngineGPU<PageRank> >(nVertices, &vertexData[0], (int)srcs.size(), &srcs[0], &dsts[0]);
-//  if( dumpResults )
-//  {
-//    printf("GPU:\n");
-//    outputRanks(nVertices, &vertexData[0]);
-//  }
+  //only run GPU code on master for now, since gpugas does not yet support mpi
+  //also means we need to read in the entire graph here.
+  if( MASTER )
+  {
+    srcs.clear();
+    dsts.clear();
+    loadGraph(inputFilename, nVertices, srcs, dsts);
+    printf("loaded %s with %d vertices and %zd edges\n", inputFilename, nVertices, srcs.size());
+    run< GASEngineGPU<PageRank> >(nVertices, &vertexData[0], (int)srcs.size(), &srcs[0], &dsts[0]);
+    if( dumpResults )
+    {
+      printf("GPU:\n");
+      outputRanks(nVertices, &vertexData[0]);
+    }
+  }
 
-  if( runTest )
+  if( MASTER && runTest )
   {
     const float tol = 1.0e-6f;
     bool diff = false;
@@ -202,7 +211,7 @@ int main(int argc, char **argv)
       printf("No differences found\n");
   }
 
-  if( outputFilename && mpiRank == 0 )
+  if( MASTER && outputFilename )
   {
     FILE* f = fopen(outputFilename, "w");
     printf("writing results to file %s\n", outputFilename);

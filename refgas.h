@@ -46,12 +46,13 @@ class GASEngineRef
   std::vector<GatherResult> m_gatherResults;
   std::vector<Int>  m_active;
   std::vector<Int>  m_applyRet;
-  std::vector<bool> m_activeFlags;
+  std::vector<char> m_activeFlags;
 
   #ifdef VERTEXAPI_USE_MPI
-  int          m_mpiRank;
-  MPI_Datatype m_mpiGatherResultType;
-  MPI_Op       m_mpiReduceOp;
+    int          m_mpiRank;
+    Int          m_nTotalActive; //Total active vertices across all processes
+    MPI_Datatype m_mpiGatherResultType;
+    MPI_Op       m_mpiReduceOp;
   #endif
 
   public:
@@ -137,7 +138,11 @@ class GASEngineRef
       m_active.reserve(m_nVertices);
       m_applyRet.resize(m_nVertices);
       m_activeFlags.resize(m_nVertices, false);
-      m_gatherResults.resize(m_nVertices);
+      m_gatherResults.resize(m_nVertices, Program::gatherZero);
+
+      #ifdef VERTEXAPI_USE_MPI
+        m_nTotalActive = 0;
+      #endif
     }
 
 
@@ -151,30 +156,38 @@ class GASEngineRef
     }
 
 
+    //For the MPI case, this is assumed to be an identical call
+    //on all nodes.  Otherwise this requires a union across nodes.
+    //Not resolving this now because we need a better API for
+    //initializing active nodes anyway (i.e. something that uses
+    //graph topology)
     //set the active flag for a range [vertexStart, vertexEnd)
-    //affects only the next gather step
     void setActive(Int vertexStart, Int vertexEnd)
     {
       m_active.clear();
       for( Int i = vertexStart; i < vertexEnd; ++i )
         m_active.push_back(i);
+      #ifdef VERTEXAPI_USE_MPI
+        m_nTotalActive = m_active.size();
+      #endif
     }
 
 
     //Return the number of active vertices in the next gather step
     Int countActive()
     {
-      return m_active.size();
+      #ifdef VERTEXAPI_USE_MPI
+        return m_nTotalActive;
+      #else
+        return m_active.size();
+      #endif
     }
 
 
     void gatherApply(bool haveGather=true)
     {
-      //the temporary gather results are now nVertices sized,
-      //where nVertices is the total number of vertices across all nodes
       m_gatherResults.clear();
       m_gatherResults.resize(m_nVertices, Program::gatherZero);
-      
       for( Int i = 0; i < m_active.size(); ++i )
       {
         Int dv = m_active[i];
@@ -192,18 +205,9 @@ class GASEngineRef
       }
 
       #ifdef VERTEXAPI_USE_MPI
-      for( Int i = 0; i < m_nVertices; ++i )
-      {
-        printf("%d %d %f\n", m_mpiRank, i, m_gatherResults[i]);
-      }
-      printf("finished pre\n");
-      MPI_Barrier(MPI_COMM_WORLD);
-      MPI_Allreduce(MPI_IN_PLACE, &m_gatherResults[0], m_nVertices
-        , m_mpiGatherResultType, m_mpiReduceOp, MPI_COMM_WORLD);
-      for( Int i = 0; i < m_nVertices; ++i )
-      {
-        printf("after %d %d %f\n", m_mpiRank, i, m_gatherResults[i]);
-      }
+        MPI_Barrier(MPI_COMM_WORLD);
+        MPI_Allreduce(MPI_IN_PLACE, &m_gatherResults[0], m_nVertices
+          , m_mpiGatherResultType, m_mpiReduceOp, MPI_COMM_WORLD);
       #endif
 
       //separate loop to keep bulk synchronous
@@ -241,6 +245,31 @@ class GASEngineRef
           }
         }
       }
+
+      //if a vertex is active on one node, it has to be active on
+      //all nodes.  At the very least we need to run apply() on all
+      //the nodes, even if we want to avoid the gather().
+      #ifdef VERTEXAPI_USE_MPI
+        MPI_Barrier(MPI_COMM_WORLD);
+        MPI_Allreduce(MPI_IN_PLACE, &m_activeFlags[0], m_nVertices, MPI_CHAR
+          , MPI_LOR, MPI_COMM_WORLD);
+      #endif
+
+      m_active.clear();
+      for( Int i = 0; i < m_nVertices; ++i )
+      {
+        if( m_activeFlags[i] )
+          m_active.push_back(i);
+      }
+
+      #ifdef VERTEXAPI_USE_MPI
+        //find out how many total vertices are active
+        m_nTotalActive = m_active.size();
+        MPI_Barrier(MPI_COMM_WORLD);
+        //NOTE: The MPI_INT dataype is not correctly templatized!
+        MPI_Allreduce(MPI_IN_PLACE, &m_nTotalActive, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+        printf("%d active=%zd totalActive=%d\n", m_mpiRank, m_active.size(), m_nTotalActive);
+      #endif
     }
 
 
@@ -248,12 +277,6 @@ class GASEngineRef
     //returns the number of active vertices
     Int nextIter()
     {
-      m_active.clear();
-      for( Int i = 0; i < m_nVertices; ++i )
-      {
-        if( m_activeFlags[i] )
-          m_active.push_back(i);
-      }
       return countActive();
     }
   

@@ -249,6 +249,12 @@ class GASEngineGPU
     }
 
 
+    void initMPI()
+    {
+      //do nothing right now
+    }
+
+
     //initialize the graph data structures for the GPU
     //All the graph data provided here is "owned" by the GASEngine until
     //explicitly released with getResults().  We may make a copy or we
