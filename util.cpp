@@ -84,5 +84,12 @@ int parseCmdLineSimple(int argc, char** argv, const char* fmt, ...)
 }
 
 
-
+std::string filenameSuffixMPI(const char* fn, int rank, int size)
+{
+  char buf[32];
+  std::string ret(fn);
+  snprintf(buf, sizeof(buf), "_%d_%d", size, rank);
+  ret += buf;
+  return ret;
+}
 

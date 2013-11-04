@@ -21,6 +21,7 @@ limitations under the License.
 #include <vector>
 #include <algorithm>
 #include <stdio.h>
+#include <string>
 
 //some simple utility routines to avoid duplication across test programs
 
@@ -120,5 +121,9 @@ void edgeListToCSC(Int nVertices, Int nEdges
     , offsets, outSrcs, sortIndices);
 };  
 
+
+//add a rank/size suffix to the filename, used for loading pre-partitioned
+//files from disk when running with MPI
+std::string filenameSuffixMPI(const char* fn, int rank, int size);
 
 #endif
