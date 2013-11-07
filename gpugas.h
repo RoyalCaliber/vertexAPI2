@@ -65,6 +65,7 @@ Implementation Notes(VV):
 //using this because CUB device-wide reduce_by_key does not yet work
 //and I am still working on a fused gatherMap/gatherReduce kernel.
 #include "thrust/reduce.h"
+#include "thrust/sort.h"
 #include "thrust/device_ptr.h"
 
 //CUDA implementation of GAS API, version 2.
@@ -117,6 +118,10 @@ class GASEngineGPU
   Int          *m_gatherDstsTmp; //keys for reduce_by_key in gatherReduce
   Int          *m_reduceByKeyTmp; //unused, required for compat with thrust
 
+  Int          *m_gatherOutputIdx; //actually scalar variable, but forced to use
+                                   //pointer because nvcc doesn't like __device__
+                                   //members
+  
   //MGPU context
   mgpu::ContextPtr m_mgpuContext;
 
@@ -221,6 +226,7 @@ class GASEngineGPU
       , m_gatherTmp(0)
       , m_gatherDstsTmp(0)
       , m_reduceByKeyTmp(0)
+      , m_gatherOutputIdx(0)
     {
       m_mgpuContext = mgpu::CreateCudaDevice(0);
     }
@@ -245,6 +251,7 @@ class GASEngineGPU
       gpuFree(m_gatherTmp);
       gpuFree(m_gatherDstsTmp);
       gpuFree(m_reduceByKeyTmp);
+      gpuFree(m_gatherOutputIdx);
       //don't we need to explicitly clean up m_mgpuContext?
     }
 
@@ -356,6 +363,8 @@ class GASEngineGPU
       gpuAlloc(m_gatherTmp, m_nVertices);
       gpuAlloc(m_gatherDstsTmp, m_nEdges + m_nVertices);
       gpuAlloc(m_reduceByKeyTmp, m_nVertices);
+
+      gpuAlloc(m_gatherOutputIdx, 1); //sigh
     }
 
 
@@ -493,7 +502,8 @@ class GASEngineGPU
 
         Int nBlocks = MGPU_DIV_UP(nActiveEdges + m_nActive, nThreadsPerBlock);
 
-
+        cudaMemset(m_gatherOutputIdx, 0, sizeof(Int));
+        SYNC_CHECK();
         dim3 grid = calcGridDim(nBlocks);
         GPUGASKernels::kGatherMap<Program, Int, nThreadsPerBlock, !sortEdgesForGather>
           <<<grid, nThreadsPerBlock>>>
@@ -508,15 +518,28 @@ class GASEngineGPU
           , m_vertexData
           , m_edgeData
           , m_edgeIndexCSC
+          , m_gatherOutputIdx
           , m_gatherDstsTmp
           , m_gatherMapTmp );
         SYNC_CHECK();
+        Int nOutputs;
+        copyToHost(&nOutputs, m_gatherOutputIdx, 1);
+        printf("nActiveEdges=%d nOutputs=%d\n", nActiveEdges, nOutputs);
 
+        //output is not necessarily contiguous by key
+        //so we must sort-by-key prior to reduce-by-key
+        thrust::sort_by_key(thrust::device_pointer_cast(m_gatherDstsTmp)
+          , thrust::device_pointer_cast(m_gatherDstsTmp + nOutputs)
+          , thrust::device_pointer_cast(m_gatherMapTmp));
+
+//        printGPUArray(m_gatherDstsTmp, 10);
+//        printf("---\n");
+        printGPUArray(m_gatherMapTmp, 10);
 
         //using thrust reduce_by_key because CUB version not complete (doesn't compile)
         //anyway, this will all be rolled into a single kernel as this develops
         thrust::reduce_by_key(thrust::device_pointer_cast(m_gatherDstsTmp)
-          , thrust::device_pointer_cast(m_gatherDstsTmp + nActiveEdges)
+          , thrust::device_pointer_cast(m_gatherDstsTmp + nOutputs)
           , thrust::device_pointer_cast(m_gatherMapTmp)
           , thrust::device_pointer_cast(m_reduceByKeyTmp)
           , thrust::device_pointer_cast(m_gatherTmp)
