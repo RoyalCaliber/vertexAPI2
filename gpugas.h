@@ -121,7 +121,7 @@ class GASEngineGPU
   Int          *m_gatherOutputIdx; //actually scalar variable, but forced to use
                                    //pointer because nvcc doesn't like __device__
                                    //members
-  
+
   //MGPU context
   mgpu::ContextPtr m_mgpuContext;
 
@@ -303,7 +303,7 @@ class GASEngineGPU
         gpuAlloc(m_edgeIndexCSC, m_nEdges);
 
       //these are pretty big temporaries, but we're assuming 'unlimited'
-      //host memory for now.  
+      //host memory for now.
       std::vector<Int> tmpOffsets(m_nVertices + 1);
       std::vector<Int> tmpVerts(m_nEdges);
       std::vector<Int> tmpEdgeIndex(m_nEdges);
@@ -322,9 +322,9 @@ class GASEngineGPU
       }
       else
         copyToGPU(m_edgeIndexCSC, &tmpEdgeIndex[0], m_nEdges);
-        
+
       copyToGPU(m_srcOffsets, &tmpOffsets[0], m_nVertices + 1);
-      copyToGPU(m_srcs, &tmpVerts[0], m_nEdges);      
+      copyToGPU(m_srcs, &tmpVerts[0], m_nEdges);
 
       //get CSR representation for activate/scatter
       edgeListToCSR(m_nVertices, m_nEdges
@@ -534,7 +534,7 @@ class GASEngineGPU
 
 //        printGPUArray(m_gatherDstsTmp, 10);
 //        printf("---\n");
-        printGPUArray(m_gatherMapTmp, 10);
+//        printGPUArray(m_gatherMapTmp, 10);
 
         //using thrust reduce_by_key because CUB version not complete (doesn't compile)
         //anyway, this will all be rolled into a single kernel as this develops

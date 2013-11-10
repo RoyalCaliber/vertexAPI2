@@ -153,8 +153,6 @@ __global__ void kGatherMap(Int nActiveVertices
       else
         result = Program::gatherMap(vertexData + dst, vertexData + src, edgeData + iEdge );
     }
-    else
-      result = Program::gatherZero;
 
 //    //write out a key and a result.
 //    dsts[gTid] = dstVerts[0];
@@ -163,14 +161,14 @@ __global__ void kGatherMap(Int nActiveVertices
   }
 
   //why does this not work when using rank == 0?
-  const bool headFlag = (rank >= 0);
+  const int headFlag = (rank == 0) || ( (bTid % 32) == 0);
 
   //These can be removed if we don't reuse the same shared memory.
     __syncthreads();
   
   //Do a warp-reduce-by-key using cub
   result = WarpReduce(shared.wrTmp).template HeadSegmentedReduce
-    <CubReduceWrapper<Program>, bool>(result, headFlag, CubReduceWrapper<Program>());
+    <CubReduceWrapper<Program>, int>(result, headFlag, CubReduceWrapper<Program>());
     
   //this sync not needed if we can have separate smem temp areas for
   //WarpReduce and BlockScan
