@@ -160,7 +160,7 @@ __global__ void kGatherMap(Int nActiveVertices
 
   }
 
-  //why does this not work when using rank == 0?
+  //start of the sequence at beginning of a warp and when rank == 0
   const int headFlag = (rank == 0) || ( (bTid % 32) == 0);
 
   //These can be removed if we don't reuse the same shared memory.
