@@ -161,7 +161,7 @@ __global__ void kGatherMap(Int nActiveVertices
   }
 
   //start of the sequence at beginning of a warp and when rank == 0
-  const int headFlag = (rank == 0) || ( (bTid % 32) == 0);
+  const int headFlag = (rank == 0) || ( (bTid % 32) == 0 && rank != -1);
 
   //These can be removed if we don't reuse the same shared memory.
     __syncthreads();
