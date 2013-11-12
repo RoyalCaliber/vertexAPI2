@@ -65,8 +65,9 @@ Implementation Notes(VV):
 //using this because CUB device-wide reduce_by_key does not yet work
 //and I am still working on a fused gatherMap/gatherReduce kernel.
 #include "thrust/reduce.h"
-#include "thrust/sort.h"
 #include "thrust/device_ptr.h"
+
+#include "cub/cub.cuh"
 
 //CUDA implementation of GAS API, version 2.
 
@@ -75,9 +76,13 @@ template<typename Program
   , bool sortEdgesForGather = true>
 class GASEngineGPU
 {
+//public here is necessary to satisfy nvcc, I don't why - eke
+public:
+  typedef typename Program::GatherResult GatherResult;
+
+private:
   typedef typename Program::VertexData   VertexData;
   typedef typename Program::EdgeData     EdgeData;
-  typedef typename Program::GatherResult GatherResult;
 
   Int         m_nVertices;
   Int         m_nEdges;
@@ -113,14 +118,17 @@ class GASEngineGPU
   Int *m_edgeCountScan;
 
   //These go away once gatherMap/gatherReduce/apply are fused
-  GatherResult *m_gatherMapTmp;  //store results of gatherMap()
   GatherResult *m_gatherTmp;     //store results of gatherReduce()
-  Int          *m_gatherDstsTmp; //keys for reduce_by_key in gatherReduce
   Int          *m_reduceByKeyTmp; //unused, required for compat with thrust
 
   Int          *m_gatherOutputIdx; //actually scalar variable, but forced to use
                                    //pointer because nvcc doesn't like __device__
                                    //members
+  cub::DoubleBuffer<Int>          m_gatherDstsTmp;
+  cub::DoubleBuffer<GatherResult> m_gatherMapTmp;
+  uint8_t *m_tempSortStorage;
+  size_t   m_temp_storage_bytes;
+  int      m_bitsToSort;
 
   //MGPU context
   mgpu::ContextPtr m_mgpuContext;
@@ -222,11 +230,10 @@ class GASEngineGPU
       , m_applyRet(0)
       , m_activeFlags(0)
       , m_edgeCountScan(0)
-      , m_gatherMapTmp(0)
       , m_gatherTmp(0)
-      , m_gatherDstsTmp(0)
       , m_reduceByKeyTmp(0)
       , m_gatherOutputIdx(0)
+      , m_tempSortStorage(0)
     {
       m_mgpuContext = mgpu::CreateCudaDevice(0);
     }
@@ -247,11 +254,14 @@ class GASEngineGPU
       gpuFree(m_applyRet);
       gpuFree(m_activeFlags);
       gpuFree(m_edgeCountScan);
-      gpuFree(m_gatherMapTmp);
+      gpuFree(m_gatherMapTmp.d_buffers[0]);
+      gpuFree(m_gatherMapTmp.d_buffers[1]);
       gpuFree(m_gatherTmp);
-      gpuFree(m_gatherDstsTmp);
+      gpuFree(m_gatherDstsTmp.d_buffers[0]);
+      gpuFree(m_gatherDstsTmp.d_buffers[1]);
       gpuFree(m_reduceByKeyTmp);
       gpuFree(m_gatherOutputIdx);
+      gpuFree(m_tempSortStorage);
       //don't we need to explicitly clean up m_mgpuContext?
     }
 
@@ -279,6 +289,8 @@ class GASEngineGPU
       m_nEdges     = nEdges;
       m_vertexDataHost = vertexData;
       m_edgeDataHost   = edgeData;
+
+      m_bitsToSort = 32 - __builtin_clz(m_nVertices);
 
       //allocate copy of vertex and edge data on GPU
       if( m_vertexDataHost )
@@ -359,12 +371,20 @@ class GASEngineGPU
       gpuAlloc(m_edgeCountScan, m_nVertices);
       //have to allocate extra for faked incoming edges when there are
       //no incoming edges
-      gpuAlloc(m_gatherMapTmp, m_nEdges + m_nVertices);
+      gpuAlloc(m_gatherMapTmp.d_buffers[0], m_nEdges + m_nVertices);
+      gpuAlloc(m_gatherMapTmp.d_buffers[1], m_nEdges + m_nVertices);
       gpuAlloc(m_gatherTmp, m_nVertices);
-      gpuAlloc(m_gatherDstsTmp, m_nEdges + m_nVertices);
+      gpuAlloc(m_gatherDstsTmp.d_buffers[0], m_nEdges + m_nVertices);
+      gpuAlloc(m_gatherDstsTmp.d_buffers[1], m_nEdges + m_nVertices);
       gpuAlloc(m_reduceByKeyTmp, m_nVertices);
 
       gpuAlloc(m_gatherOutputIdx, 1); //sigh
+
+      m_temp_storage_bytes = 0;
+      cub::DeviceRadixSort::SortPairs((void *)m_tempSortStorage, m_temp_storage_bytes, m_gatherDstsTmp,
+                                      m_gatherMapTmp, m_nEdges + m_nVertices);
+
+      gpuAlloc(m_tempSortStorage, m_temp_storage_bytes);
     }
 
 
@@ -519,8 +539,8 @@ class GASEngineGPU
           , m_edgeData
           , m_edgeIndexCSC
           , m_gatherOutputIdx
-          , m_gatherDstsTmp
-          , m_gatherMapTmp );
+          , m_gatherDstsTmp.Current()
+          , m_gatherMapTmp.Current() );
         SYNC_CHECK();
         Int nOutputs;
         copyToHost(&nOutputs, m_gatherOutputIdx, 1);
@@ -528,19 +548,24 @@ class GASEngineGPU
 
         //output is not necessarily contiguous by key
         //so we must sort-by-key prior to reduce-by-key
-        thrust::sort_by_key(thrust::device_pointer_cast(m_gatherDstsTmp)
-          , thrust::device_pointer_cast(m_gatherDstsTmp + nOutputs)
-          , thrust::device_pointer_cast(m_gatherMapTmp));
 
-//        printGPUArray(m_gatherDstsTmp, 10);
+        cub::DeviceRadixSort::SortPairs((void *)m_tempSortStorage
+                                      , m_temp_storage_bytes
+                                      , m_gatherDstsTmp
+                                      , m_gatherMapTmp
+                                      , nOutputs
+                                      , 0
+                                      , m_bitsToSort);
+
+//        printGPUArray(m_gatherDstsTmp.Current(), 10);
 //        printf("---\n");
-//        printGPUArray(m_gatherMapTmp, 10);
+//        printGPUArray(m_gatherMapTmp.Current(), 10);
 
         //using thrust reduce_by_key because CUB version not complete (doesn't compile)
         //anyway, this will all be rolled into a single kernel as this develops
-        thrust::reduce_by_key(thrust::device_pointer_cast(m_gatherDstsTmp)
-          , thrust::device_pointer_cast(m_gatherDstsTmp + nOutputs)
-          , thrust::device_pointer_cast(m_gatherMapTmp)
+        thrust::reduce_by_key(thrust::device_pointer_cast(m_gatherDstsTmp.Current())
+          , thrust::device_pointer_cast(m_gatherDstsTmp.Current() + nOutputs)
+          , thrust::device_pointer_cast(m_gatherMapTmp.Current())
           , thrust::device_pointer_cast(m_reduceByKeyTmp)
           , thrust::device_pointer_cast(m_gatherTmp)
           , thrust::equal_to<Int>()
