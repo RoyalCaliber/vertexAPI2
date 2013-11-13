@@ -539,8 +539,8 @@ private:
           , m_edgeData
           , m_edgeIndexCSC
           , m_gatherOutputIdx
-          , m_gatherDstsTmp.Current()
-          , m_gatherMapTmp.Current() );
+          , m_gatherDstsTmp.d_buffers[m_gatherDstsTmp.selector]
+          , m_gatherMapTmp.d_buffers[m_gatherMapTmp.selector] );
         SYNC_CHECK();
         Int nOutputs;
         copyToHost(&nOutputs, m_gatherOutputIdx, 1);
@@ -563,9 +563,9 @@ private:
 
         //using thrust reduce_by_key because CUB version not complete (doesn't compile)
         //anyway, this will all be rolled into a single kernel as this develops
-        thrust::reduce_by_key(thrust::device_pointer_cast(m_gatherDstsTmp.Current())
-          , thrust::device_pointer_cast(m_gatherDstsTmp.Current() + nOutputs)
-          , thrust::device_pointer_cast(m_gatherMapTmp.Current())
+        thrust::reduce_by_key(thrust::device_pointer_cast(m_gatherDstsTmp.d_buffers[m_gatherDstsTmp.selector])
+          , thrust::device_pointer_cast(m_gatherDstsTmp.d_buffers[m_gatherDstsTmp.selector] + nOutputs)
+          , thrust::device_pointer_cast(m_gatherMapTmp.d_buffers[m_gatherMapTmp.selector])
           , thrust::device_pointer_cast(m_reduceByKeyTmp)
           , thrust::device_pointer_cast(m_gatherTmp)
           , thrust::equal_to<Int>()
