@@ -80,8 +80,14 @@ int scatter_if_inputloc_onephase(int num,
                              mgpu::ContextPtr mgpuContext) {
 
   int total;
-  mgpu::Scan<mgpu::MgpuScanTypeExc>(pred_begin, num, output_begin, mgpu::ScanOpAdd(),
-                                    &total, true, *mgpuContext);
+  mgpu::Scan<mgpu::MgpuScanTypeExc>(pred_begin
+                                  , num
+                                  , 0
+                                  , mgpu::plus<int>()
+                                  , (int *) NULL
+                                  , &total
+                                  , output_begin
+                                  , *mgpuContext);
   return total;
 }
 
@@ -101,8 +107,14 @@ int scatter_if_general_twophase(InputIt     input_begin,
 
   MGPU_MEM(int) d_map = mgpuContext->Malloc<int>(num);
 
-  mgpu::Scan<mgpu::MgpuScanTypeExc>(pred_begin, num, d_map->get(), mgpu::ScanOpAdd(),
-                                    &total, true, *mgpuContext);
+  mgpu::Scan<mgpu::MgpuScanTypeExc>(pred_begin
+                                  , num
+                                  , 0
+                                  , mgpu::plus<int>()
+                                  , (int *)NULL
+                                  , &total
+                                  , d_map->get()
+                                  , *mgpuContext);
 
   const int numThreads = 192;
   const int numBlocks = min((num + numThreads - 1) / numThreads, 256);
@@ -125,8 +137,14 @@ int scatter_if_inputloc_twophase(int num,
 
   MGPU_MEM(int) d_map = mgpuContext->Malloc<int>(num);
 
-  mgpu::Scan<mgpu::MgpuScanTypeExc>(pred_begin, num, d_map->get(), mgpu::ScanOpAdd(),
-                                    &total, false, *mgpuContext);
+  mgpu::Scan<mgpu::MgpuScanTypeExc>(pred_begin
+                                  , num
+                                  , 0
+                                  , mgpu::plus<int>()
+                                  , (int *)NULL
+                                  , &total
+                                  , d_map->get()
+                                  , *mgpuContext);
 
   const int numThreads = 192;
   const int numBlocks = min((num + numThreads - 1) / numThreads, 256);

@@ -96,7 +96,7 @@ __global__ void kGatherMap(Int nActiveVertices
   //int nDsts = range.w - range.z;
 
   int iActive[VT];
-  mgpu::DeviceSharedToReg<NT, VT>(NT * VT, shared.indices, bTid, iActive);
+  mgpu::DeviceSharedToReg<NT, VT>(shared.indices, bTid, iActive);
 
   //each thread that is responsible for an edge should now apply Program::gatherMap
   if( bTid < edgeCount )

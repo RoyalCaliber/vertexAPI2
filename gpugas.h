@@ -61,6 +61,7 @@ Implementation Notes(VV):
 #include <iterator>
 #include "moderngpu.cuh"
 #include "primitives/scatter_if_mgpu.h"
+#include "util.h"
 
 //using this because CUB device-wide reduce_by_key does not yet work
 //and I am still working on a fused gatherMap/gatherReduce kernel.
@@ -296,7 +297,7 @@ class GASEngineGPU
         gpuAlloc(m_edgeIndexCSC, m_nEdges);
 
       //these are pretty big temporaries, but we're assuming 'unlimited'
-      //host memory for now.  
+      //host memory for now.
       std::vector<Int> tmpOffsets(m_nVertices + 1);
       std::vector<Int> tmpVerts(m_nEdges);
       std::vector<Int> tmpEdgeIndex(m_nEdges);
@@ -315,9 +316,9 @@ class GASEngineGPU
       }
       else
         copyToGPU(m_edgeIndexCSC, &tmpEdgeIndex[0], m_nEdges);
-        
+
       copyToGPU(m_srcOffsets, &tmpOffsets[0], m_nVertices + 1);
-      copyToGPU(m_srcs, &tmpVerts[0], m_nEdges);      
+      copyToGPU(m_srcs, &tmpVerts[0], m_nEdges);
 
       //get CSR representation for activate/scatter
       edgeListToCSR(m_nVertices, m_nEdges
@@ -397,67 +398,52 @@ class GASEngineGPU
     //MGPU-specific, equivalent to a thrust transform_iterator
     //customize scan to use edge counts from either offset differences or
     //a separately stored edge count array given a vertex list
-    struct EdgeCountScanOp
+    struct EdgeCountIterator : public std::iterator<std::input_iterator_tag, Int>
     {
-      const Int* m_offsets;
+      Int *m_offsets;
+      Int *m_active;
 
-      enum { Commutative = true };
+      __host__ __device__
+      EdgeCountIterator(Int *offsets, Int *active) : m_offsets(offsets), m_active(active) {};
 
-      typedef Int input_type;
-      typedef Int value_type;
-      typedef Int result_type;
-
-      MGPU_HOST_DEVICE value_type Extract(input_type vert, int index)
+      __device__
+      Int operator[](Int i) const
       {
-        //This seems to get called even when out of range, so we have
-        //to do an explicit check here.
-
-        //To handle the case of vertices with no incoming edges, we
-        //fake a count of 1, hence the max()
-        //There is a corresponding kludge in kGatherMap to ensure that
-        //Program::gatherMap is not actually invoked for such vertices
-        return index >= 0 ? max(m_offsets[vert + 1] - m_offsets[vert], 1) : 0;
+        Int active = m_active[i];
+        return max(m_offsets[active + 1] - m_offsets[active], 1);
       }
 
-      MGPU_HOST_DEVICE value_type Plus(value_type t1, value_type t2)
+      __device__
+      EdgeCountIterator operator +(Int i) const
       {
-        return t1 + t2;
+        return EdgeCountIterator(m_offsets, m_active + i);
       }
-
-      MGPU_HOST_DEVICE result_type Combine(input_type t1, value_type t2)
-      {
-        return t2;
-      }
-
-      MGPU_HOST_DEVICE input_type Identity()
-      {
-        return 0;
-      }
-
-      EdgeCountScanOp(const Int* offsets) : m_offsets(offsets) {}
     };
 
     //this one checks if predicate is false and outputs zero if so
     //used in the current impl for scatter, this will go away.
-    struct PredicatedEdgeCountScanOp : public EdgeCountScanOp
+    struct PredicatedEdgeCountIterator : public std::iterator<std::input_iterator_tag, Int>
     {
-      using EdgeCountScanOp::m_offsets;
-      const Int* m_predicates;
+      Int *m_offsets;
+      Int *m_active;
+      Int *m_predicates;
 
-      typedef typename EdgeCountScanOp::input_type input_type;
-      typedef typename EdgeCountScanOp::value_type value_type;
+      __host__ __device__
+      PredicatedEdgeCountIterator(Int *offsets, Int *active, Int * predicates) : m_offsets(offsets), m_active(active), m_predicates(predicates) {};
 
-      MGPU_HOST_DEVICE value_type Extract(input_type vert, int index)
+      __device__
+      Int operator[](Int i) const
       {
-        return (index >= 0 && m_predicates[index]) ? m_offsets[vert + 1] - m_offsets[vert] : 0;
+        Int active = m_active[i];
+        return m_predicates[i] ? m_offsets[active + 1] - m_offsets[active] : 0;
       }
 
-      PredicatedEdgeCountScanOp(const Int* offsets, const Int* predicates)
-        : EdgeCountScanOp(offsets)
-        , m_predicates(predicates)
-      {}
+      __device__
+      PredicatedEdgeCountIterator operator +(Int i) const
+      {
+        return PredicatedEdgeCountIterator(m_offsets, m_active + i, m_predicates + i);
+      }
     };
-
 
     //nvcc, why can't this struct by private?
     //wrap Program::gatherReduce for use with thrust
@@ -475,14 +461,15 @@ class GASEngineGPU
       if( haveGather )
       {
         //first scan the numbers of edges from the active list
-        EdgeCountScanOp ecScanOp(m_srcOffsets);
+        EdgeCountIterator ecIterator(m_srcOffsets, m_active);
         Int nActiveEdges;
-        mgpu::Scan<mgpu::MgpuScanTypeExc, Int*, Int*, EdgeCountScanOp>(m_active
+        mgpu::Scan<mgpu::MgpuScanTypeExc, EdgeCountIterator, Int, mgpu::plus<Int>, Int*>(ecIterator
           , m_nActive
-          , m_edgeCountScan
-          , ecScanOp
+          , 0
+          , mgpu::plus<int>()
+          , NULL
           , &nActiveEdges
-          , false
+          , m_edgeCountScan
           , *m_mgpuContext);
         const int nThreadsPerBlock = 128;
 
@@ -602,14 +589,15 @@ class GASEngineGPU
     {
       //counts = m_applyRet ? outEdgeCount[ m_active ] : 0
       //first scan the numbers of edges from the active list
-      PredicatedEdgeCountScanOp ecScanOp(m_dstOffsets, m_applyRet);
+      PredicatedEdgeCountIterator ecIterator(m_dstOffsets, m_active, m_applyRet);
       Int nActiveEdges;
-      mgpu::Scan<mgpu::MgpuScanTypeExc, Int*, Int*, PredicatedEdgeCountScanOp>(m_active
+      mgpu::Scan<mgpu::MgpuScanTypeExc, PredicatedEdgeCountIterator, Int, mgpu::plus<Int>, Int*>(ecIterator
         , m_nActive
-        , m_edgeCountScan
-        , ecScanOp
+        , 0
+        , mgpu::plus<Int>()
+        , NULL
         , &nActiveEdges
-        , false
+        , m_edgeCountScan
         , *m_mgpuContext);
       SYNC_CHECK();
 
