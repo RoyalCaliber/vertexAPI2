@@ -75,9 +75,13 @@ template<typename Program
   , bool sortEdgesForGather = true>
 class GASEngineGPU
 {
+  //public to make nvcc happy
+public:
   typedef typename Program::VertexData   VertexData;
   typedef typename Program::EdgeData     EdgeData;
   typedef typename Program::GatherResult GatherResult;
+
+private:
 
   Int         m_nVertices;
   Int         m_nEdges;
@@ -447,7 +451,7 @@ class GASEngineGPU
 
     //nvcc, why can't this struct by private?
     //wrap Program::gatherReduce for use with thrust
-    struct ThrustReduceWrapper : thrust::binary_function<GatherResult, GatherResult, GatherResult>
+    struct ThrustReduceWrapper : std::binary_function<GatherResult, GatherResult, GatherResult>
     {
       __device__ GatherResult operator()(const GatherResult &left, const GatherResult &right)
       {
@@ -500,15 +504,17 @@ class GASEngineGPU
         SYNC_CHECK();
 
 
-        //using thrust reduce_by_key because CUB version not complete (doesn't compile)
-        //anyway, this will all be rolled into a single kernel as this develops
-        thrust::reduce_by_key(thrust::device_pointer_cast(m_gatherDstsTmp)
-          , thrust::device_pointer_cast(m_gatherDstsTmp + nActiveEdges)
-          , thrust::device_pointer_cast(m_gatherMapTmp)
-          , thrust::device_pointer_cast(m_reduceByKeyTmp)
-          , thrust::device_pointer_cast(m_gatherTmp)
-          , thrust::equal_to<Int>()
-          , ThrustReduceWrapper());
+        mgpu::ReduceByKey(m_gatherDstsTmp
+                        , m_gatherMapTmp
+                        , nActiveEdges
+                        , Program::gatherZero
+                        , ThrustReduceWrapper()
+                        , mgpu::equal_to<Int>()
+                        , (Int *)NULL
+                        , m_gatherTmp
+                        , NULL
+                        , NULL
+                        , *m_mgpuContext);
         SYNC_CHECK();
       }
 
