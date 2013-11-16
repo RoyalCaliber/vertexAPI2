@@ -20,6 +20,7 @@ limitations under the License.
 #include "util.h"
 #include "graphio.h"
 #include <vector>
+#include <iostream>
 
 
 //Vertex program for Pagerank
@@ -32,6 +33,7 @@ struct PageRank
   {
     float rank;
     int   numOutEdges;
+    friend std::ostream& operator<<(std::ostream &out, const VertexData &data);
   };
 
   struct EdgeData {};
@@ -181,3 +183,7 @@ int main(int argc, char **argv)
   return 0;
 }
 
+std::ostream& operator<<(std::ostream &out, const PageRank::VertexData &data) {
+  out << data.rank;
+  return out;
+}
