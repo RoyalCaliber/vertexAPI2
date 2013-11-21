@@ -120,7 +120,6 @@ private:
   GatherResult *m_gatherMapTmp;  //store results of gatherMap()
   GatherResult *m_gatherTmp;     //store results of gatherReduce()
   Int          *m_gatherDstsTmp; //keys for reduce_by_key in gatherReduce
-  Int          *m_reduceByKeyTmp; //unused, required for compat with thrust
 
   //MGPU context
   mgpu::ContextPtr m_mgpuContext;
@@ -225,9 +224,8 @@ private:
       , m_gatherMapTmp(0)
       , m_gatherTmp(0)
       , m_gatherDstsTmp(0)
-      , m_reduceByKeyTmp(0)
     {
-      m_mgpuContext = mgpu::CreateCudaDevice(0);
+      m_mgpuContext = mgpu::CreateCudaDevice(1);
     }
 
 
@@ -249,7 +247,6 @@ private:
       gpuFree(m_gatherMapTmp);
       gpuFree(m_gatherTmp);
       gpuFree(m_gatherDstsTmp);
-      gpuFree(m_reduceByKeyTmp);
       //don't we need to explicitly clean up m_mgpuContext?
     }
 
@@ -360,7 +357,6 @@ private:
       gpuAlloc(m_gatherMapTmp, m_nEdges + m_nVertices);
       gpuAlloc(m_gatherTmp, m_nVertices);
       gpuAlloc(m_gatherDstsTmp, m_nEdges + m_nVertices);
-      gpuAlloc(m_reduceByKeyTmp, m_nVertices);
     }
 
 
