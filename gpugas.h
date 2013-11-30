@@ -116,10 +116,18 @@ private:
   //some temporaries that are needed for LBS
   Int *m_edgeCountScan;
 
+  //mapped memory to avoid explicit copy of reduced value back to host memory
+  Int *m_hostMappedValue;
+  Int *m_deviceMappedValue;
+
   //These go away once gatherMap/gatherReduce/apply are fused
   GatherResult *m_gatherMapTmp;  //store results of gatherMap()
   GatherResult *m_gatherTmp;     //store results of gatherReduce()
   Int          *m_gatherDstsTmp; //keys for reduce_by_key in gatherReduce
+
+  //Preprocessed data for speeding up reduce_by_key when all vertices are active
+  std::auto_ptr<mgpu::ReduceByKeyPreprocessData> preprocessData;
+  bool preComputed;
 
   //MGPU context
   mgpu::ContextPtr m_mgpuContext;
@@ -224,6 +232,7 @@ private:
       , m_gatherMapTmp(0)
       , m_gatherTmp(0)
       , m_gatherDstsTmp(0)
+      , preComputed(false)
     {
       m_mgpuContext = mgpu::CreateCudaDevice(1);
     }
@@ -247,6 +256,7 @@ private:
       gpuFree(m_gatherMapTmp);
       gpuFree(m_gatherTmp);
       gpuFree(m_gatherDstsTmp);
+      cudaFreeHost(m_hostMappedValue);
       //don't we need to explicitly clean up m_mgpuContext?
     }
 
@@ -357,6 +367,10 @@ private:
       gpuAlloc(m_gatherMapTmp, m_nEdges + m_nVertices);
       gpuAlloc(m_gatherTmp, m_nVertices);
       gpuAlloc(m_gatherDstsTmp, m_nEdges + m_nVertices);
+
+      //allocated mapped memory
+      cudaMallocHost(&m_hostMappedValue, sizeof(Int), cudaHostAllocMapped );
+      cudaHostGetDevicePointer(&m_deviceMappedValue, m_hostMappedValue, 0);
     }
 
 
@@ -462,16 +476,17 @@ private:
       {
         //first scan the numbers of edges from the active list
         EdgeCountIterator ecIterator(m_srcOffsets, m_active);
-        Int nActiveEdges;
         mgpu::Scan<mgpu::MgpuScanTypeExc, EdgeCountIterator, Int, mgpu::plus<Int>, Int*>(ecIterator
           , m_nActive
           , 0
           , mgpu::plus<int>()
-          , NULL
-          , &nActiveEdges
+          , m_deviceMappedValue
+          , (Int *)NULL
           , m_edgeCountScan
           , *m_mgpuContext);
+        cudaDeviceSynchronize();
         const int nThreadsPerBlock = 128;
+        Int nActiveEdges = *m_hostMappedValue;
 
         MGPU_MEM(int) partitions = mgpu::MergePathPartitions<mgpu::MgpuBoundsUpper>
           (mgpu::counting_iterator<int>(0), nActiveEdges, m_edgeCountScan, m_nActive
@@ -500,17 +515,41 @@ private:
         SYNC_CHECK();
 
 
-        mgpu::ReduceByKey(m_gatherDstsTmp
-                        , m_gatherMapTmp
-                        , nActiveEdges
-                        , Program::gatherZero
-                        , ThrustReduceWrapper()
-                        , mgpu::equal_to<Int>()
-                        , (Int *)NULL
-                        , m_gatherTmp
-                        , NULL
-                        , NULL
-                        , *m_mgpuContext);
+        if (m_nActive == m_nVertices && !preComputed) {
+          mgpu::ReduceByKeyPreprocess<GatherResult>(nActiveEdges
+                                                  , m_gatherDstsTmp
+                                                  , (Int *)NULL
+                                                  , mgpu::equal_to<Int>()
+                                                  , NULL
+                                                  , NULL
+                                                  , &preprocessData
+                                                  , *m_mgpuContext);
+
+          preComputed = true;
+        }
+
+
+        if (m_nActive == m_nVertices) {
+          mgpu::ReduceByKeyApply(*preprocessData
+                               , m_gatherMapTmp
+                               , Program::gatherZero
+                               , ThrustReduceWrapper()
+                               , m_gatherTmp
+                               , *m_mgpuContext);
+        }
+        else {
+          mgpu::ReduceByKey(m_gatherDstsTmp
+                          , m_gatherMapTmp
+                          , nActiveEdges
+                          , Program::gatherZero
+                          , ThrustReduceWrapper()
+                          , mgpu::equal_to<Int>()
+                          , (Int *)NULL
+                          , m_gatherTmp
+                          , NULL
+                          , NULL
+                          , *m_mgpuContext);
+        }
         SYNC_CHECK();
       }
 
@@ -581,6 +620,34 @@ private:
       }
     };
 
+    struct ActivateOutputIteratorSmallSize
+    {
+      int* m_count;
+      Int* m_list;
+
+      __host__ __device__
+      ActivateOutputIteratorSmallSize(int* count, Int *list) : m_count(count), m_list(list) {}
+
+      __device__
+      ActivateOutputIteratorSmallSize& operator[](Int i)
+      {
+        return *this;
+      }
+
+      __device__
+      void operator =(Int dst)
+      {
+        int pos = atomicAdd(m_count, 1);
+        m_list[pos] = dst;
+      }
+
+      __device__
+      ActivateOutputIteratorSmallSize operator +(Int i)
+      {
+        return ActivateOutputIteratorSmallSize(m_count, m_list);
+      }
+    };
+
 
     //not writing a custom kernel for this until we get kGather right because
     //it actually shares a lot with this kernel.
@@ -592,15 +659,16 @@ private:
       //counts = m_applyRet ? outEdgeCount[ m_active ] : 0
       //first scan the numbers of edges from the active list
       PredicatedEdgeCountIterator ecIterator(m_dstOffsets, m_active, m_applyRet);
-      Int nActiveEdges;
       mgpu::Scan<mgpu::MgpuScanTypeExc, PredicatedEdgeCountIterator, Int, mgpu::plus<Int>, Int*>(ecIterator
         , m_nActive
         , 0
         , mgpu::plus<Int>()
-        , NULL
-        , &nActiveEdges
+        , m_deviceMappedValue
+        , (Int *)NULL
         , m_edgeCountScan
         , *m_mgpuContext);
+      cudaDeviceSynchronize();
+      Int nActiveEdges = *m_hostMappedValue;
       SYNC_CHECK();
 
       //Gathers the dst vertex ids from m_dsts and writes a true for each
@@ -618,11 +686,13 @@ private:
 
       //convert m_activeFlags to new active compact list in m_active
       //set m_nActive to the number of active vertices
-      m_nActive = scatter_if_inputloc_twophase(m_nVertices,
-                                               m_activeFlags,
-                                               m_active,
-                                               m_mgpuContext);
+      scatter_if_inputloc_twophase(m_nVertices,
+                                   m_activeFlags,
+                                   m_active,
+                                   m_deviceMappedValue,
+                                   m_mgpuContext);
       SYNC_CHECK();
+      m_nActive = *m_hostMappedValue;
     }
 
 
