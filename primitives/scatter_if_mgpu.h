@@ -37,7 +37,7 @@ void scatterKernel(InputIt in,
 }
 
 template<typename PredType>
-struct scatterIterator {
+struct scatterIterator : public std::iterator<std::input_iterator_tag, scatterIterator<PredType> > {
   PredType m_pred;
   int*  m_dst;
   int   m_index;
@@ -86,7 +86,7 @@ int scatter_if_inputloc_onephase(int num,
                                   , mgpu::plus<int>()
                                   , (int *) NULL
                                   , &total
-                                  , output_begin
+                                  , scatterIterator<PredIt>(pred_begin, output_begin)//output_begin
                                   , *mgpuContext);
   return total;
 }
