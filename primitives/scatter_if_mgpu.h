@@ -128,12 +128,11 @@ int scatter_if_general_twophase(InputIt     input_begin,
 }
 
 template<typename PredIt, typename OutputIt>
-int scatter_if_inputloc_twophase(int num,
+void scatter_if_inputloc_twophase(int num,
                                  PredIt pred_begin,
                                  OutputIt    output_begin,
+                                 int *d_total,
                                  mgpu::ContextPtr mgpuContext) {
-
-  int total;
 
   MGPU_MEM(int) d_map = mgpuContext->Malloc<int>(num);
 
@@ -141,8 +140,8 @@ int scatter_if_inputloc_twophase(int num,
                                   , num
                                   , 0
                                   , mgpu::plus<int>()
+                                  , d_total
                                   , (int *)NULL
-                                  , &total
                                   , d_map->get()
                                   , *mgpuContext);
 
@@ -155,8 +154,6 @@ int scatter_if_inputloc_twophase(int num,
                                            pred_begin,
                                            d_map->get(),
                                            output_begin);
-
-  return total;
 }
 
 #endif

@@ -120,6 +120,10 @@ private:
   Int *m_hostMappedValue;
   Int *m_deviceMappedValue;
 
+  //counter and list for small sized scatter / activation
+  Int *m_edgeOutputCounter;
+  Int *m_outputEdgeList;
+
   //These go away once gatherMap/gatherReduce/apply are fused
   GatherResult *m_gatherMapTmp;  //store results of gatherMap()
   GatherResult *m_gatherTmp;     //store results of gatherReduce()
@@ -232,6 +236,8 @@ private:
       , m_gatherMapTmp(0)
       , m_gatherTmp(0)
       , m_gatherDstsTmp(0)
+      , m_edgeOutputCounter(0)
+      , m_outputEdgeList(0)
       , preComputed(false)
     {
       m_mgpuContext = mgpu::CreateCudaDevice(1);
@@ -256,6 +262,8 @@ private:
       gpuFree(m_gatherMapTmp);
       gpuFree(m_gatherTmp);
       gpuFree(m_gatherDstsTmp);
+      gpuFree(m_edgeOutputCounter);
+      gpuFree(m_outputEdgeList);
       cudaFreeHost(m_hostMappedValue);
       //don't we need to explicitly clean up m_mgpuContext?
     }
@@ -371,6 +379,15 @@ private:
       //allocated mapped memory
       cudaMallocHost(&m_hostMappedValue, sizeof(Int), cudaHostAllocMapped );
       cudaHostGetDevicePointer(&m_deviceMappedValue, m_hostMappedValue, 0);
+
+      //allocate for small sized list
+      gpuAlloc(m_edgeOutputCounter, 1);
+      if (m_nEdges < 50000) {
+        gpuAlloc(m_outputEdgeList, m_nEdges);
+      }
+      else {
+        gpuAlloc(m_outputEdgeList, m_nEdges / 100 + 1);
+      }
     }
 
 
@@ -648,6 +665,70 @@ private:
       }
     };
 
+    struct ListToHeadFlagsIterator : public std::iterator<std::input_iterator_tag, Int>
+    {
+      int *m_list;
+      int m_offset;
+
+      __host__ __device__
+      ListToHeadFlagsIterator(int *list) : m_list(list), m_offset(0) {}
+
+      __host__ __device__
+      ListToHeadFlagsIterator(int *list, int offset) : m_list(list), m_offset(offset) {}
+
+      __device__
+      int operator[](int i) {
+        if (m_offset == 0 && i == 0)
+          return 1;
+        else {
+          return m_list[m_offset + i] != m_list[m_offset + i - 1];
+        }
+      }
+
+      __device__
+      ListToHeadFlagsIterator operator+(int i) const
+      {
+        return ListToHeadFlagsIterator(m_list, m_offset + i);
+      }
+    };
+
+    struct ListOutputIterator
+    {
+      int* m_inputlist;
+      int* m_outputlist;
+      int m_offset;
+
+      __host__ __device__
+      ListOutputIterator(int *inputlist, int *outputlist) : m_inputlist(inputlist), m_outputlist(outputlist), m_offset(0) {}
+
+      __host__ __device__
+      ListOutputIterator(int *inputlist, int *outputlist, int offset) : m_inputlist(inputlist), m_outputlist(outputlist), m_offset(offset) {}
+
+      __host__ __device__
+      ListOutputIterator operator[](Int i) const
+      {
+        return ListOutputIterator(m_inputlist, m_outputlist, m_offset + i);
+      }
+
+      __device__
+      void operator =(Int dst)
+      {
+        if (m_offset == 0) {
+          m_outputlist[dst] = m_inputlist[0];
+        }
+        else {
+          if (m_inputlist[m_offset] != m_inputlist[m_offset - 1]) {
+            m_outputlist[dst] = m_inputlist[m_offset];
+          }
+        }
+      }
+
+      __device__
+      ListOutputIterator operator +(Int i) const
+      {
+        return ListOutputIterator(m_inputlist, m_outputlist, m_offset + i);
+      }
+    };
 
     //not writing a custom kernel for this until we get kGather right because
     //it actually shares a lot with this kernel.
@@ -671,28 +752,66 @@ private:
       Int nActiveEdges = *m_hostMappedValue;
       SYNC_CHECK();
 
-      //Gathers the dst vertex ids from m_dsts and writes a true for each
-      //dst vertex into m_activeFlags
-      CHECK( cudaMemset(m_activeFlags, 0, sizeof(char) * m_nVertices) );
+      if (nActiveEdges == 0) {
+        m_nActive = 0;
+      }
+      //100 is an empirically chosen value that seems to give good performance
+      else if (nActiveEdges > m_nEdges / 100) {
+        //Gathers the dst vertex ids from m_dsts and writes a true for each
+        //dst vertex into m_activeFlags
+        CHECK( cudaMemset(m_activeFlags, 0, sizeof(char) * m_nVertices) );
 
-      IntervalGather(nActiveEdges
-        , ActivateGatherIterator(m_dstOffsets, m_active)
-        , m_edgeCountScan
-        , m_nActive
-        , m_dsts
-        , ActivateOutputIterator(m_activeFlags)
-        , *m_mgpuContext);
-      SYNC_CHECK();
+        IntervalGather(nActiveEdges
+          , ActivateGatherIterator(m_dstOffsets, m_active)
+          , m_edgeCountScan
+          , m_nActive
+          , m_dsts
+          , ActivateOutputIterator(m_activeFlags)
+          , *m_mgpuContext);
+        SYNC_CHECK();
 
-      //convert m_activeFlags to new active compact list in m_active
-      //set m_nActive to the number of active vertices
-      scatter_if_inputloc_twophase(m_nVertices,
-                                   m_activeFlags,
-                                   m_active,
-                                   m_deviceMappedValue,
-                                   m_mgpuContext);
-      SYNC_CHECK();
-      m_nActive = *m_hostMappedValue;
+        //convert m_activeFlags to new active compact list in m_active
+        //set m_nActive to the number of active vertices
+        scatter_if_inputloc_twophase(m_nVertices,
+                                     m_activeFlags,
+                                     m_active,
+                                     m_deviceMappedValue,
+                                     m_mgpuContext);
+        SYNC_CHECK();
+        m_nActive = *m_hostMappedValue;
+      }
+      else {
+        //we have a small number of edges, so just output into a list
+        //with atomics, sort and then extract unique values
+        CHECK( cudaMemset(m_edgeOutputCounter, 0, sizeof(int) ) );
+
+        IntervalGather(nActiveEdges
+          , ActivateGatherIterator(m_dstOffsets, m_active)
+          , m_edgeCountScan
+          , m_nActive
+          , m_dsts
+          , ActivateOutputIteratorSmallSize(m_edgeOutputCounter, m_outputEdgeList)
+          , *m_mgpuContext);
+        SYNC_CHECK();
+
+        mgpu::MergesortKeys(m_outputEdgeList, nActiveEdges, mgpu::less<Int>(), *m_mgpuContext);
+        SYNC_CHECK();
+
+        mgpu::Scan<mgpu::MgpuScanTypeExc, ListToHeadFlagsIterator, Int, mgpu::plus<Int>, ListOutputIterator>(
+            ListToHeadFlagsIterator(m_outputEdgeList)
+          , nActiveEdges
+          , 0
+          , mgpu::plus<Int>()
+          , m_deviceMappedValue
+          , (Int *)NULL
+          , ListOutputIterator(m_outputEdgeList, m_active)
+          , *m_mgpuContext);
+
+
+        cudaDeviceSynchronize();
+        m_nActive = *m_hostMappedValue;
+        SYNC_CHECK();
+      }
     }
 
 
