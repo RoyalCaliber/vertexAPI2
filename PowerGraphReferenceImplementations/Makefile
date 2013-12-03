@@ -2,8 +2,8 @@
 #later.
 
 #Set this to your local installation of graphlab
-GRAPHLAB_DIR = /home/vishal/compile/graphlabapi
-#GRAPHLAB_DIR = /home/erich/graphlabapi
+#GRAPHLAB_DIR = /home/vishal/compile/graphlabapi
+GRAPHLAB_DIR = /home/erich/graphlabapi
 
 
 #We need a nice way to import the compile and link flags from the graphlab
@@ -22,7 +22,7 @@ GRAPHLAB_DIR = /home/vishal/compile/graphlabapi
   -lboost_iostreams -lboost_date_time -lz -lpthread -ltcmalloc -levent \
   -levent_pthreads -lmpichcxx -lmpich -ljson -lgomp
   
-ALGORITHMS = pagerank sssp sssp_gather bfs
+ALGORITHMS = pagerank sssp sssp_gather bfs connected_component
 
 BINARIES = $(foreach x,$(ALGORITHMS),$x.x)
 
