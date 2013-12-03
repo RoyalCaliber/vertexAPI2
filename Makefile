@@ -11,7 +11,7 @@ LD_LIBS = -lz -lmgpu
 
 HEADERS = graphio.h util.h refgas.h gpugas.h gpugas_kernels.cuh
 
-BINARIES = pagerank sssp bfs
+BINARIES = pagerank sssp bfs createCCGraph
 
 all: $(BINARIES)
 
@@ -44,6 +44,9 @@ connected_component.o: connected_component.cu primitives/scatter_if_mgpu.h $(HEA
 
 cc: connected_component.o graphio.o util.o
 	nvcc $(NVCC_OPTS) $(NVCC_ARCHS) -o $@ $^ $(LD_LIBS)
+
+createCCGraph: createCCGraph.cpp graphio.o
+	g++ -o $@ $< -I . graphio.o -lz
 
 clean:
 	rm -f $(BINARIES) *.o
