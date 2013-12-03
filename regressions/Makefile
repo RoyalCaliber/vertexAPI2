@@ -1,10 +1,10 @@
 GRAPH_DIR = ../test-graphs
 
 #Can restrict this to the graphs you have downloaded
-GRAPHS = ak2010 belgium_osm delaunay_n13 coAuthorsDBLP delaunay_n21 webbase-1M #soc-LiveJournal1 kron_g500-logn21
+GRAPHS = ak2010 belgium_osm delaunay_n13 coAuthorsDBLP delaunay_n21 webbase-1M soc-LiveJournal1 #kron_g500-logn21
 
 #which algorithms to check
-ALGORITHMS = pagerank sssp bfs
+ALGORITHMS = pagerank sssp bfs connected_component
 
 #location of reference implementations
 PG_REF_DIR = ../PowerGraphReferenceImplementations
@@ -68,6 +68,18 @@ endef
 %.bfs.pass: %.bfs.test %.bfs.gold
 	./checkDist.py $*.bfs.test $*.bfs.gold
 	touch $*.bfs.pass
+
+%.connected_component.gold: $(PG_REF_DIR)/connected_component.x
+	$(call MAKEGOLD,$*,connected_component)
+
+%.connected_component.test: ../connected_component
+	../connected_component $(GRAPH_DIR)/$*/$*.mtx __tmp$* | awk '/Took/{print $$2}' > $*.connected_component.timing_gpu
+	sort -n __tmp$* > $@
+	rm -f __tmp$*
+
+%.connected_component.pass: %.connected_component.test %.connected_component.gold
+	./checkDist.py $*.connected_component.test $*.connected_component.gold
+	touch $*.connected_component.pass
 
 clean:
 	rm -f *.test *.timing_gpu *.pass
