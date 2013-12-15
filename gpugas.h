@@ -61,6 +61,7 @@ Implementation Notes(VV):
 #include <iterator>
 #include "moderngpu.cuh"
 #include "primitives/scatter_if_mgpu.h"
+#include "util.h"
 
 //using this because CUB device-wide reduce_by_key does not yet work
 //and I am still working on a fused gatherMap/gatherReduce kernel.
@@ -74,9 +75,13 @@ template<typename Program
   , bool sortEdgesForGather = true>
 class GASEngineGPU
 {
+  //public to make nvcc happy
+public:
   typedef typename Program::VertexData   VertexData;
   typedef typename Program::EdgeData     EdgeData;
   typedef typename Program::GatherResult GatherResult;
+
+private:
 
   Int         m_nVertices;
   Int         m_nEdges;
@@ -111,11 +116,22 @@ class GASEngineGPU
   //some temporaries that are needed for LBS
   Int *m_edgeCountScan;
 
+  //mapped memory to avoid explicit copy of reduced value back to host memory
+  Int *m_hostMappedValue;
+  Int *m_deviceMappedValue;
+
+  //counter and list for small sized scatter / activation
+  Int *m_edgeOutputCounter;
+  Int *m_outputEdgeList;
+
   //These go away once gatherMap/gatherReduce/apply are fused
   GatherResult *m_gatherMapTmp;  //store results of gatherMap()
   GatherResult *m_gatherTmp;     //store results of gatherReduce()
   Int          *m_gatherDstsTmp; //keys for reduce_by_key in gatherReduce
-  Int          *m_reduceByKeyTmp; //unused, required for compat with thrust
+
+  //Preprocessed data for speeding up reduce_by_key when all vertices are active
+  std::auto_ptr<mgpu::ReduceByKeyPreprocessData> preprocessData;
+  bool preComputed;
 
   //MGPU context
   mgpu::ContextPtr m_mgpuContext;
@@ -220,9 +236,11 @@ class GASEngineGPU
       , m_gatherMapTmp(0)
       , m_gatherTmp(0)
       , m_gatherDstsTmp(0)
-      , m_reduceByKeyTmp(0)
+      , m_edgeOutputCounter(0)
+      , m_outputEdgeList(0)
+      , preComputed(false)
     {
-      m_mgpuContext = mgpu::CreateCudaDevice(0);
+      m_mgpuContext = mgpu::CreateCudaDevice(1);
     }
 
 
@@ -244,7 +262,9 @@ class GASEngineGPU
       gpuFree(m_gatherMapTmp);
       gpuFree(m_gatherTmp);
       gpuFree(m_gatherDstsTmp);
-      gpuFree(m_reduceByKeyTmp);
+      gpuFree(m_edgeOutputCounter);
+      gpuFree(m_outputEdgeList);
+      cudaFreeHost(m_hostMappedValue);
       //don't we need to explicitly clean up m_mgpuContext?
     }
 
@@ -296,7 +316,7 @@ class GASEngineGPU
         gpuAlloc(m_edgeIndexCSC, m_nEdges);
 
       //these are pretty big temporaries, but we're assuming 'unlimited'
-      //host memory for now.  
+      //host memory for now.
       std::vector<Int> tmpOffsets(m_nVertices + 1);
       std::vector<Int> tmpVerts(m_nEdges);
       std::vector<Int> tmpEdgeIndex(m_nEdges);
@@ -315,9 +335,9 @@ class GASEngineGPU
       }
       else
         copyToGPU(m_edgeIndexCSC, &tmpEdgeIndex[0], m_nEdges);
-        
+
       copyToGPU(m_srcOffsets, &tmpOffsets[0], m_nVertices + 1);
-      copyToGPU(m_srcs, &tmpVerts[0], m_nEdges);      
+      copyToGPU(m_srcs, &tmpVerts[0], m_nEdges);
 
       //get CSR representation for activate/scatter
       edgeListToCSR(m_nVertices, m_nEdges
@@ -355,7 +375,19 @@ class GASEngineGPU
       gpuAlloc(m_gatherMapTmp, m_nEdges + m_nVertices);
       gpuAlloc(m_gatherTmp, m_nVertices);
       gpuAlloc(m_gatherDstsTmp, m_nEdges + m_nVertices);
-      gpuAlloc(m_reduceByKeyTmp, m_nVertices);
+
+      //allocated mapped memory
+      cudaMallocHost(&m_hostMappedValue, sizeof(Int), cudaHostAllocMapped );
+      cudaHostGetDevicePointer(&m_deviceMappedValue, m_hostMappedValue, 0);
+
+      //allocate for small sized list
+      gpuAlloc(m_edgeOutputCounter, 1);
+      if (m_nEdges < 50000) {
+        gpuAlloc(m_outputEdgeList, m_nEdges);
+      }
+      else {
+        gpuAlloc(m_outputEdgeList, m_nEdges / 100 + 1);
+      }
     }
 
 
@@ -397,71 +429,56 @@ class GASEngineGPU
     //MGPU-specific, equivalent to a thrust transform_iterator
     //customize scan to use edge counts from either offset differences or
     //a separately stored edge count array given a vertex list
-    struct EdgeCountScanOp
+    struct EdgeCountIterator : public std::iterator<std::input_iterator_tag, Int>
     {
-      const Int* m_offsets;
+      Int *m_offsets;
+      Int *m_active;
 
-      enum { Commutative = true };
+      __host__ __device__
+      EdgeCountIterator(Int *offsets, Int *active) : m_offsets(offsets), m_active(active) {};
 
-      typedef Int input_type;
-      typedef Int value_type;
-      typedef Int result_type;
-
-      MGPU_HOST_DEVICE value_type Extract(input_type vert, int index)
+      __device__
+      Int operator[](Int i) const
       {
-        //This seems to get called even when out of range, so we have
-        //to do an explicit check here.
-
-        //To handle the case of vertices with no incoming edges, we
-        //fake a count of 1, hence the max()
-        //There is a corresponding kludge in kGatherMap to ensure that
-        //Program::gatherMap is not actually invoked for such vertices
-        return index >= 0 ? max(m_offsets[vert + 1] - m_offsets[vert], 1) : 0;
+        Int active = m_active[i];
+        return max(m_offsets[active + 1] - m_offsets[active], 1);
       }
 
-      MGPU_HOST_DEVICE value_type Plus(value_type t1, value_type t2)
+      __device__
+      EdgeCountIterator operator +(Int i) const
       {
-        return t1 + t2;
+        return EdgeCountIterator(m_offsets, m_active + i);
       }
-
-      MGPU_HOST_DEVICE result_type Combine(input_type t1, value_type t2)
-      {
-        return t2;
-      }
-
-      MGPU_HOST_DEVICE input_type Identity()
-      {
-        return 0;
-      }
-
-      EdgeCountScanOp(const Int* offsets) : m_offsets(offsets) {}
     };
 
     //this one checks if predicate is false and outputs zero if so
     //used in the current impl for scatter, this will go away.
-    struct PredicatedEdgeCountScanOp : public EdgeCountScanOp
+    struct PredicatedEdgeCountIterator : public std::iterator<std::input_iterator_tag, Int>
     {
-      using EdgeCountScanOp::m_offsets;
-      const Int* m_predicates;
+      Int *m_offsets;
+      Int *m_active;
+      Int *m_predicates;
 
-      typedef typename EdgeCountScanOp::input_type input_type;
-      typedef typename EdgeCountScanOp::value_type value_type;
+      __host__ __device__
+      PredicatedEdgeCountIterator(Int *offsets, Int *active, Int * predicates) : m_offsets(offsets), m_active(active), m_predicates(predicates) {};
 
-      MGPU_HOST_DEVICE value_type Extract(input_type vert, int index)
+      __device__
+      Int operator[](Int i) const
       {
-        return (index >= 0 && m_predicates[index]) ? m_offsets[vert + 1] - m_offsets[vert] : 0;
+        Int active = m_active[i];
+        return m_predicates[i] ? m_offsets[active + 1] - m_offsets[active] : 0;
       }
 
-      PredicatedEdgeCountScanOp(const Int* offsets, const Int* predicates)
-        : EdgeCountScanOp(offsets)
-        , m_predicates(predicates)
-      {}
+      __device__
+      PredicatedEdgeCountIterator operator +(Int i) const
+      {
+        return PredicatedEdgeCountIterator(m_offsets, m_active + i, m_predicates + i);
+      }
     };
-
 
     //nvcc, why can't this struct by private?
     //wrap Program::gatherReduce for use with thrust
-    struct ThrustReduceWrapper : thrust::binary_function<GatherResult, GatherResult, GatherResult>
+    struct ThrustReduceWrapper : std::binary_function<GatherResult, GatherResult, GatherResult>
     {
       __device__ GatherResult operator()(const GatherResult &left, const GatherResult &right)
       {
@@ -475,16 +492,18 @@ class GASEngineGPU
       if( haveGather )
       {
         //first scan the numbers of edges from the active list
-        EdgeCountScanOp ecScanOp(m_srcOffsets);
-        Int nActiveEdges;
-        mgpu::Scan<mgpu::MgpuScanTypeExc, Int*, Int*, EdgeCountScanOp>(m_active
+        EdgeCountIterator ecIterator(m_srcOffsets, m_active);
+        mgpu::Scan<mgpu::MgpuScanTypeExc, EdgeCountIterator, Int, mgpu::plus<Int>, Int*>(ecIterator
           , m_nActive
+          , 0
+          , mgpu::plus<int>()
+          , m_deviceMappedValue
+          , (Int *)NULL
           , m_edgeCountScan
-          , ecScanOp
-          , &nActiveEdges
-          , false
           , *m_mgpuContext);
+        cudaDeviceSynchronize();
         const int nThreadsPerBlock = 128;
+        Int nActiveEdges = *m_hostMappedValue;
 
         MGPU_MEM(int) partitions = mgpu::MergePathPartitions<mgpu::MgpuBoundsUpper>
           (mgpu::counting_iterator<int>(0), nActiveEdges, m_edgeCountScan, m_nActive
@@ -513,15 +532,41 @@ class GASEngineGPU
         SYNC_CHECK();
 
 
-        //using thrust reduce_by_key because CUB version not complete (doesn't compile)
-        //anyway, this will all be rolled into a single kernel as this develops
-        thrust::reduce_by_key(thrust::device_pointer_cast(m_gatherDstsTmp)
-          , thrust::device_pointer_cast(m_gatherDstsTmp + nActiveEdges)
-          , thrust::device_pointer_cast(m_gatherMapTmp)
-          , thrust::device_pointer_cast(m_reduceByKeyTmp)
-          , thrust::device_pointer_cast(m_gatherTmp)
-          , thrust::equal_to<Int>()
-          , ThrustReduceWrapper());
+        if (m_nActive == m_nVertices && !preComputed) {
+          mgpu::ReduceByKeyPreprocess<GatherResult>(nActiveEdges
+                                                  , m_gatherDstsTmp
+                                                  , (Int *)NULL
+                                                  , mgpu::equal_to<Int>()
+                                                  , NULL
+                                                  , NULL
+                                                  , &preprocessData
+                                                  , *m_mgpuContext);
+
+          preComputed = true;
+        }
+
+
+        if (m_nActive == m_nVertices) {
+          mgpu::ReduceByKeyApply(*preprocessData
+                               , m_gatherMapTmp
+                               , Program::gatherZero
+                               , ThrustReduceWrapper()
+                               , m_gatherTmp
+                               , *m_mgpuContext);
+        }
+        else {
+          mgpu::ReduceByKey(m_gatherDstsTmp
+                          , m_gatherMapTmp
+                          , nActiveEdges
+                          , Program::gatherZero
+                          , ThrustReduceWrapper()
+                          , mgpu::equal_to<Int>()
+                          , (Int *)NULL
+                          , m_gatherTmp
+                          , NULL
+                          , NULL
+                          , *m_mgpuContext);
+        }
         SYNC_CHECK();
       }
 
@@ -592,6 +637,98 @@ class GASEngineGPU
       }
     };
 
+    struct ActivateOutputIteratorSmallSize
+    {
+      int* m_count;
+      Int* m_list;
+
+      __host__ __device__
+      ActivateOutputIteratorSmallSize(int* count, Int *list) : m_count(count), m_list(list) {}
+
+      __device__
+      ActivateOutputIteratorSmallSize& operator[](Int i)
+      {
+        return *this;
+      }
+
+      __device__
+      void operator =(Int dst)
+      {
+        int pos = atomicAdd(m_count, 1);
+        m_list[pos] = dst;
+      }
+
+      __device__
+      ActivateOutputIteratorSmallSize operator +(Int i)
+      {
+        return ActivateOutputIteratorSmallSize(m_count, m_list);
+      }
+    };
+
+    struct ListToHeadFlagsIterator : public std::iterator<std::input_iterator_tag, Int>
+    {
+      int *m_list;
+      int m_offset;
+
+      __host__ __device__
+      ListToHeadFlagsIterator(int *list) : m_list(list), m_offset(0) {}
+
+      __host__ __device__
+      ListToHeadFlagsIterator(int *list, int offset) : m_list(list), m_offset(offset) {}
+
+      __device__
+      int operator[](int i) {
+        if (m_offset == 0 && i == 0)
+          return 1;
+        else {
+          return m_list[m_offset + i] != m_list[m_offset + i - 1];
+        }
+      }
+
+      __device__
+      ListToHeadFlagsIterator operator+(int i) const
+      {
+        return ListToHeadFlagsIterator(m_list, m_offset + i);
+      }
+    };
+
+    struct ListOutputIterator
+    {
+      int* m_inputlist;
+      int* m_outputlist;
+      int m_offset;
+
+      __host__ __device__
+      ListOutputIterator(int *inputlist, int *outputlist) : m_inputlist(inputlist), m_outputlist(outputlist), m_offset(0) {}
+
+      __host__ __device__
+      ListOutputIterator(int *inputlist, int *outputlist, int offset) : m_inputlist(inputlist), m_outputlist(outputlist), m_offset(offset) {}
+
+      __host__ __device__
+      ListOutputIterator operator[](Int i) const
+      {
+        return ListOutputIterator(m_inputlist, m_outputlist, m_offset + i);
+      }
+
+      __device__
+      void operator =(Int dst)
+      {
+        if (m_offset == 0) {
+          m_outputlist[dst] = m_inputlist[0];
+        }
+        else {
+          if (m_inputlist[m_offset] != m_inputlist[m_offset - 1]) {
+            m_outputlist[dst] = m_inputlist[m_offset];
+          }
+        }
+      }
+
+      __device__
+      ListOutputIterator operator +(Int i) const
+      {
+        return ListOutputIterator(m_inputlist, m_outputlist, m_offset + i);
+      }
+    };
 
     //not writing a custom kernel for this until we get kGather right because
     //it actually shares a lot with this kernel.
@@ -602,37 +739,79 @@ class GASEngineGPU
     {
       //counts = m_applyRet ? outEdgeCount[ m_active ] : 0
       //first scan the numbers of edges from the active list
-      PredicatedEdgeCountScanOp ecScanOp(m_dstOffsets, m_applyRet);
-      Int nActiveEdges;
-      mgpu::Scan<mgpu::MgpuScanTypeExc, Int*, Int*, PredicatedEdgeCountScanOp>(m_active
+      PredicatedEdgeCountIterator ecIterator(m_dstOffsets, m_active, m_applyRet);
+      mgpu::Scan<mgpu::MgpuScanTypeExc, PredicatedEdgeCountIterator, Int, mgpu::plus<Int>, Int*>(ecIterator
         , m_nActive
+        , 0
+        , mgpu::plus<Int>()
+        , m_deviceMappedValue
+        , (Int *)NULL
         , m_edgeCountScan
-        , ecScanOp
-        , &nActiveEdges
-        , false
         , *m_mgpuContext);
+      cudaDeviceSynchronize();
+      Int nActiveEdges = *m_hostMappedValue;
       SYNC_CHECK();
 
-      //Gathers the dst vertex ids from m_dsts and writes a true for each
-      //dst vertex into m_activeFlags
-      CHECK( cudaMemset(m_activeFlags, 0, sizeof(char) * m_nVertices) );
+      if (nActiveEdges == 0) {
+        m_nActive = 0;
+      }
+      //100 is an empirically chosen value that seems to give good performance
+      else if (nActiveEdges > m_nEdges / 100) {
+        //Gathers the dst vertex ids from m_dsts and writes a true for each
+        //dst vertex into m_activeFlags
+        CHECK( cudaMemset(m_activeFlags, 0, sizeof(char) * m_nVertices) );
 
-      IntervalGather(nActiveEdges
-        , ActivateGatherIterator(m_dstOffsets, m_active)
-        , m_edgeCountScan
-        , m_nActive
-        , m_dsts
-        , ActivateOutputIterator(m_activeFlags)
-        , *m_mgpuContext);
-      SYNC_CHECK();
+        IntervalGather(nActiveEdges
+          , ActivateGatherIterator(m_dstOffsets, m_active)
+          , m_edgeCountScan
+          , m_nActive
+          , m_dsts
+          , ActivateOutputIterator(m_activeFlags)
+          , *m_mgpuContext);
+        SYNC_CHECK();
 
-      //convert m_activeFlags to new active compact list in m_active
-      //set m_nActive to the number of active vertices
-      m_nActive = scatter_if_inputloc_twophase(m_nVertices,
-                                               m_activeFlags,
-                                               m_active,
-                                               m_mgpuContext);
-      SYNC_CHECK();
+        //convert m_activeFlags to new active compact list in m_active
+        //set m_nActive to the number of active vertices
+        scatter_if_inputloc_twophase(m_nVertices,
+                                     m_activeFlags,
+                                     m_active,
+                                     m_deviceMappedValue,
+                                     m_mgpuContext);
+        SYNC_CHECK();
+        m_nActive = *m_hostMappedValue;
+      }
+      else {
+        //we have a small number of edges, so just output into a list
+        //with atomics, sort and then extract unique values
+        CHECK( cudaMemset(m_edgeOutputCounter, 0, sizeof(int) ) );
+
+        IntervalGather(nActiveEdges
+          , ActivateGatherIterator(m_dstOffsets, m_active)
+          , m_edgeCountScan
+          , m_nActive
+          , m_dsts
+          , ActivateOutputIteratorSmallSize(m_edgeOutputCounter, m_outputEdgeList)
+          , *m_mgpuContext);
+        SYNC_CHECK();
+
+        mgpu::MergesortKeys(m_outputEdgeList, nActiveEdges, mgpu::less<Int>(), *m_mgpuContext);
+        SYNC_CHECK();
+
+        mgpu::Scan<mgpu::MgpuScanTypeExc, ListToHeadFlagsIterator, Int, mgpu::plus<Int>, ListOutputIterator>(
+            ListToHeadFlagsIterator(m_outputEdgeList)
+          , nActiveEdges
+          , 0
+          , mgpu::plus<Int>()
+          , m_deviceMappedValue
+          , (Int *)NULL
+          , ListOutputIterator(m_outputEdgeList, m_active)
+          , *m_mgpuContext);
+
+
+        cudaDeviceSynchronize();
+        m_nActive = *m_hostMappedValue;
+        SYNC_CHECK();
+      }
     }
 
 

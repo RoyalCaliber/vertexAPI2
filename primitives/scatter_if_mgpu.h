@@ -37,7 +37,7 @@ void scatterKernel(InputIt in,
 }
 
 template<typename PredType>
-struct scatterIterator {
+struct scatterIterator : public std::iterator<std::input_iterator_tag, scatterIterator<PredType> > {
   PredType m_pred;
   int*  m_dst;
   int   m_index;
@@ -80,8 +80,14 @@ int scatter_if_inputloc_onephase(int num,
                              mgpu::ContextPtr mgpuContext) {
 
   int total;
-  mgpu::Scan<mgpu::MgpuScanTypeExc>(pred_begin, num, output_begin, mgpu::ScanOpAdd(),
-                                    &total, true, *mgpuContext);
+  mgpu::Scan<mgpu::MgpuScanTypeExc>(pred_begin
+                                  , num
+                                  , 0
+                                  , mgpu::plus<int>()
+                                  , (int *) NULL
+                                  , &total
+                                  , scatterIterator<PredIt>(pred_begin, output_begin)//output_begin
+                                  , *mgpuContext);
   return total;
 }
 
@@ -101,8 +107,14 @@ int scatter_if_general_twophase(InputIt     input_begin,
 
   MGPU_MEM(int) d_map = mgpuContext->Malloc<int>(num);
 
-  mgpu::Scan<mgpu::MgpuScanTypeExc>(pred_begin, num, d_map->get(), mgpu::ScanOpAdd(),
-                                    &total, true, *mgpuContext);
+  mgpu::Scan<mgpu::MgpuScanTypeExc>(pred_begin
+                                  , num
+                                  , 0
+                                  , mgpu::plus<int>()
+                                  , (int *)NULL
+                                  , &total
+                                  , d_map->get()
+                                  , *mgpuContext);
 
   const int numThreads = 192;
   const int numBlocks = min((num + numThreads - 1) / numThreads, 256);
@@ -116,17 +128,22 @@ int scatter_if_general_twophase(InputIt     input_begin,
 }
 
 template<typename PredIt, typename OutputIt>
-int scatter_if_inputloc_twophase(int num,
+void scatter_if_inputloc_twophase(int num,
                                  PredIt pred_begin,
                                  OutputIt    output_begin,
+                                 int *d_total,
                                  mgpu::ContextPtr mgpuContext) {
-
-  int total;
 
   MGPU_MEM(int) d_map = mgpuContext->Malloc<int>(num);
 
-  mgpu::Scan<mgpu::MgpuScanTypeExc>(pred_begin, num, d_map->get(), mgpu::ScanOpAdd(),
-                                    &total, false, *mgpuContext);
+  mgpu::Scan<mgpu::MgpuScanTypeExc>(pred_begin
+                                  , num
+                                  , 0
+                                  , mgpu::plus<int>()
+                                  , d_total
+                                  , (int *)NULL
+                                  , d_map->get()
+                                  , *mgpuContext);
 
   const int numThreads = 192;
   const int numBlocks = min((num + numThreads - 1) / numThreads, 256);
@@ -137,8 +154,6 @@ int scatter_if_inputloc_twophase(int num,
                                            pred_begin,
                                            d_map->get(),
                                            output_begin);
-
-  return total;
 }
 
 #endif

@@ -95,6 +95,14 @@ static int loadGraph_common( gzFile f
     if( buffer[0] == commentChar || isBlankLine( buffer ) )
       continue;
 
+    if( ignoreFirstDataLine && firstDataLine )
+    {
+      int nVerticesX, nVerticesY, nEdges;
+      sscanf(buffer, "%d%d%d", &nVerticesX, &nVerticesY, &nEdges);
+      firstDataLine = false;
+      continue;
+    }
+
     int src, dst;
     int nbytes;
     int np = sscanf( buffer, "%d%d%n", &src, &dst, &nbytes );
@@ -109,12 +117,6 @@ static int loadGraph_common( gzFile f
     {
       --src;
       --dst;
-    }
-
-    if( ignoreFirstDataLine && firstDataLine )
-    {
-      firstDataLine = false;
-      continue;
     }
 
     if (disallowSelfLinks && src == dst) {

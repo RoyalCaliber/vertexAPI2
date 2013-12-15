@@ -1,0 +1,12 @@
+ak2010*
+belgium_osm*
+coAuthorsDBLP*
+delaunay*
+kron_g500-logn21*
+soc-LiveJournal1*
+webbase-1M*
+*.o
+bfs
+pagerank
+sssp
+*.x

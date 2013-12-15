@@ -17,7 +17,6 @@ def convert( header, inputFile, outputFile, outputExt ):
   if outputExt == 'mtx':
     commentDelimiter = '%'
     outputFile.write('%%MatrixMarket matrix ' + header['format'] + ' Integer ' + header['symType'] +'\n')
-    outputFile.write('-1 -1\n') #bogus values that are ignored by our reader
   else:
     commentDelimiter = '#'
 
@@ -31,6 +30,9 @@ def convert( header, inputFile, outputFile, outputExt ):
       outputFile.write( commentDelimiter + line[1:] )
     else:
       if firstDataLine: #ignore the first non-comment line
+        if outputExt == 'mtx':
+          outputFile.write(line) #bogus values that are ignored by our reader
+
         firstDataLine = False
       else:
         src, dst = line.split()[:2] #any edge values are thrown
