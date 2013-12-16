@@ -692,7 +692,7 @@ private:
       }
     };
 
-    struct ListOutputIterator
+    struct ListOutputIterator : public std::iterator<std::output_iterator_tag, Int>
     {
       int* m_inputlist;
       int* m_outputlist;
