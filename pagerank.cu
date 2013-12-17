@@ -84,26 +84,21 @@ void outputRanks(int n, const PageRank::VertexData* vertexData, FILE* f = stdout
 
 
 template<typename Engine>
-void run(int nVertices, PageRank::VertexData* vertexData, int nEdges
+int64_t run(int nVertices, PageRank::VertexData* vertexData, int nEdges
   , const int* srcs, const int* dsts)
 {
   Engine engine;
-  printf("Created engine\n");
   #ifdef VERTEXAPI_USE_MPI
     engine.initMPI();
-    printf("engine.initMPI succeeded\n");
   #endif
   engine.setGraph(nVertices, vertexData, nEdges, 0, srcs, dsts);
-  printf("engine.setGraph finished\n");
   //all vertices begin active for pagerank
   engine.setActive(0, nVertices);
-  printf("setActive complete\n");
   int64_t t0 = currentTime();
   engine.run();
-  printf("finished run\n");
   engine.getResults();
   int64_t t1 = currentTime();
-  printf("Took %f ms\n", (t1 - t0)/1000.0f);
+  return t1 - t0;
 }
 
 
@@ -175,53 +170,39 @@ int main(int argc, char **argv)
     }
   }
 
-  run< GASEngineGPU<PageRank> >(nVertices, &vertexData[0], (int)srcs.size(), &srcs[0], &dsts[0]);
-  if( dumpResults )
+  int64_t t = run< GASEngineGPU<PageRank> >(nVertices, &vertexData[0], (int)srcs.size(), &srcs[0], &dsts[0]);
+  
+  if( MASTER )
+    printf("Took %f ms\n", t/1000.0f);
+    
+  if( MASTER && dumpResults )
   {
     printf("GPU:\n");
     outputRanks(nVertices, &vertexData[0]);
   }
 
-
-//  //only run GPU code on master for now, since gpugas does not yet support mpi
-//  //also means we need to read in the entire graph here.
-//  if( MASTER )
-//  {
-//    srcs.clear();
-//    dsts.clear();
-//    loadGraph(inputFilename, nVertices, srcs, dsts);
-//    printf("loaded %s with %d vertices and %zd edges\n", inputFilename, nVertices, srcs.size());
-//    run< GASEngineGPU<PageRank> >(nVertices, &vertexData[0], (int)srcs.size(), &srcs[0], &dsts[0]);
-//    if( dumpResults )
-//    {
-//      printf("GPU:\n");
-//      outputRanks(nVertices, &vertexData[0]);
-//    }
-//  }
-
-//  if( MASTER && runTest )
-//  {
-//    const float tol = 1.0e-6f;
-//    bool diff = false;
-//    for( int i = 0; i < nVertices; ++i )
-//    {
-//      if( fabs(vertexData[i].rank - refVertexData[i].rank) > tol )
-//      {
-//        printf("%d %f %f\n", i, refVertexData[i].rank, vertexData[i].rank);
-//        diff = true;
-//      }
-//    }
-//    if( diff )
-//      return 1;
-//    else
-//      printf("No differences found\n");
-//  }
+  if( MASTER && runTest )
+  {
+    const float tol = 1.0e-6f;
+    bool diff = false;
+    for( int i = 0; i < nVertices; ++i )
+    {
+      if( fabs(vertexData[i].rank - refVertexData[i].rank) > tol )
+      {
+        printf("%d %f %f\n", i, refVertexData[i].rank, vertexData[i].rank);
+        diff = true;
+      }
+    }
+    if( diff )
+      return 1;
+    else
+      printf("No differences found\n");
+  }
 
   if( MASTER && outputFilename )
   {
     FILE* f = fopen(outputFilename, "w");
     printf("writing results to file %s\n", outputFilename);
-    //Note: writing refgas results out to test reference implementation
     outputRanks(nVertices, &vertexData[0], f);
     fclose(f);
   }
