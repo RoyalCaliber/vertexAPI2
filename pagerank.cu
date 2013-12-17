@@ -88,14 +88,19 @@ void run(int nVertices, PageRank::VertexData* vertexData, int nEdges
   , const int* srcs, const int* dsts)
 {
   Engine engine;
+  printf("Created engine\n");
   #ifdef VERTEXAPI_USE_MPI
     engine.initMPI();
+    printf("engine.initMPI succeeded\n");
   #endif
   engine.setGraph(nVertices, vertexData, nEdges, 0, srcs, dsts);
+  printf("engine.setGraph finished\n");
   //all vertices begin active for pagerank
   engine.setActive(0, nVertices);
+  printf("setActive complete\n");
   int64_t t0 = currentTime();
   engine.run();
+  printf("finished run\n");
   engine.getResults();
   int64_t t1 = currentTime();
   printf("Took %f ms\n", (t1 - t0)/1000.0f);
@@ -158,8 +163,7 @@ int main(int argc, char **argv)
   }
   
   std::vector<PageRank::VertexData> refVertexData;
-  //Forcing reference implementation to test it
-  //if( runTest )
+  if( runTest )
   {
     printf("Running reference calculation\n");
     refVertexData = vertexData;
@@ -170,6 +174,14 @@ int main(int argc, char **argv)
       outputRanks(nVertices, &refVertexData[0]);
     }
   }
+
+  run< GASEngineGPU<PageRank> >(nVertices, &vertexData[0], (int)srcs.size(), &srcs[0], &dsts[0]);
+  if( dumpResults )
+  {
+    printf("GPU:\n");
+    outputRanks(nVertices, &vertexData[0]);
+  }
+
 
 //  //only run GPU code on master for now, since gpugas does not yet support mpi
 //  //also means we need to read in the entire graph here.
@@ -210,7 +222,7 @@ int main(int argc, char **argv)
     FILE* f = fopen(outputFilename, "w");
     printf("writing results to file %s\n", outputFilename);
     //Note: writing refgas results out to test reference implementation
-    outputRanks(nVertices, &refVertexData[0], f);
+    outputRanks(nVertices, &vertexData[0], f);
     fclose(f);
   }
 

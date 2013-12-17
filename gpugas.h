@@ -136,6 +136,15 @@ private:
   //MGPU context
   mgpu::ContextPtr m_mgpuContext;
 
+  #ifdef VERTEXAPI_USE_MPI
+    int          m_mpiRank;
+    MPI_Datatype m_mpiGatherResultType;
+    MPI_Op       m_mpiReduceOp;
+    //host staging areas for MPI_Allreduce
+    GatherResult *m_gatherPartialHost; 
+    char         *m_activeFlagsHost;
+  #endif
+
   //convenience
   void errorCheck(cudaError_t err, const char* file, int line)
   {
@@ -238,9 +247,10 @@ private:
       , m_gatherDstsTmp(0)
       , m_edgeOutputCounter(0)
       , m_outputEdgeList(0)
+      , m_hostMappedValue(0)
       , preComputed(false)
     {
-      m_mgpuContext = mgpu::CreateCudaDevice(1);
+      m_mgpuContext = mgpu::CreateCudaDevice(0);
     }
 
 
@@ -264,16 +274,42 @@ private:
       gpuFree(m_gatherDstsTmp);
       gpuFree(m_edgeOutputCounter);
       gpuFree(m_outputEdgeList);
-      cudaFreeHost(m_hostMappedValue);
-      //don't we need to explicitly clean up m_mgpuContext?
+      if( m_hostMappedValue )
+        CHECK( cudaFreeHost(m_hostMappedValue) );
+      #ifdef VERTEXAPI_USE_MPI
+        if( m_gatherPartialHost ) delete[] m_gatherPartialHost;
+        if( m_activeFlagsHost ) delete[] m_activeFlagsHost;
+      #endif
     }
 
 
-    void initMPI()
-    {
-      //do nothing right now
-    }
-
+    #ifdef VERTEXAPI_USE_MPI
+      //wrap Program::gatherReduce for MPI
+      //If MPI can _correctly_ give us UVA device pointers, this
+      //can have a kernel launch inside and we can do an
+      //MPI_Allreduce on multiple GPUs without involving the host.
+      //Both MVAPICH2 and OpenMPI do not currently do the right thing.
+      //(OpenMPI segfaults, MVAPICH2 does an explicit cudamemcpyDeviceToHost
+      //and back.  We can probably fix either MPI implementation, but we
+      //don't have time for that just yet)
+      static void mpiReduce(const GatherResult *in
+        , GatherResult* inout
+        , const int *len
+        , MPI_Datatype *type)
+      {
+        for( int i = 0; i < *len; ++i )
+          inout[i] = Program::gatherReduce(inout[i], in[i]);
+      }
+    
+      void initMPI()
+      {
+        //TODO: same notes as in refgas.h
+        MPI_Comm_rank(MPI_COMM_WORLD, &m_mpiRank);
+        MPI_Type_contiguous(sizeof(GatherResult), MPI_CHAR, &m_mpiGatherResultType);
+        MPI_Type_commit(&m_mpiGatherResultType);
+        MPI_Op_create((MPI_User_function*) mpiReduce, Program::Commutative, &m_mpiReduceOp);
+      }
+    #endif
 
     //initialize the graph data structures for the GPU
     //All the graph data provided here is "owned" by the GASEngine until
@@ -394,6 +430,11 @@ private:
       else {
         gpuAlloc(m_outputEdgeList, m_nEdges / 100 + 1);
       }
+
+      #if defined(VERTEXAPI_USE_MPI)
+        m_gatherPartialHost = new GatherResult[m_nVertices];
+        m_activeFlagsHost = new char[m_nVertices];
+      #endif
     }
 
 
@@ -412,7 +453,7 @@ private:
       }
     }
 
-
+    //see note in refgas.h for MPI semantics
     //set the active flag for a range [vertexStart, vertexEnd)
     void setActive(Int vertexStart, Int vertexEnd)
     {
@@ -574,6 +615,25 @@ private:
                           , *m_mgpuContext);
         }
         SYNC_CHECK();
+
+        #ifdef VERTEXAPI_USE_MPI
+          //now we have per-node partials, do an all reduce
+          //we will migrate to doing the allreduce on the GPU without
+          //host involvement in the next iteration - we need to hack the MPI
+          //implementations currently available to do this.
+          printf("Finished local gather, m_nActive=%d\n", m_nActive);
+          copyToHost(m_gatherPartialHost, m_gatherTmp, m_nActive);
+          printf("Waiting for other processes\n");
+          MPI_Barrier(MPI_COMM_WORLD);
+          MPI_Allreduce(MPI_IN_PLACE, m_gatherPartialHost, m_nActive
+            , m_mpiGatherResultType, m_mpiReduceOp, MPI_COMM_WORLD);
+          printf("Finished allreduce\n");
+          //Note: this doesn't have to go to every GPU.  A single process
+          //can send to GPU, do the apply step and then broadcast the result to
+          //all the other GPUs, for which we do have MPI support.
+          copyToGPU(m_gatherTmp, m_gatherPartialHost, m_nActive);
+          printf("copied back to GPU\n");
+        #endif
       }
 
       //Now run the apply kernel
@@ -615,8 +675,6 @@ private:
     };
 
     //"ActivateOutputIterator[i] = dst" effectively does m_flags[dst] = true
-    //This does not work because DeviceScatter in moderngpu is written assuming
-    //a T* rather than OutputIterator .
     struct ActivateOutputIterator
     {
       char* m_flags;
@@ -758,11 +816,14 @@ private:
       Int nActiveEdges = *m_hostMappedValue;
       SYNC_CHECK();
 
-      if (nActiveEdges == 0) {
-        m_nActive = 0;
-      }
+      //with MPI, we do not optimize the low activity case, since
+      //we need to do an allreduce over the active flags.        
+      #ifdef VERTEXAPI_USE_MPI
+      if (1) {
+      #else
       //100 is an empirically chosen value that seems to give good performance
-      else if (nActiveEdges > m_nEdges / 100) {
+      if (nActiveEdges > m_nEdges / 100) {
+      #endif
         //Gathers the dst vertex ids from m_dsts and writes a true for each
         //dst vertex into m_activeFlags
         CHECK( cudaMemset(m_activeFlags, 0, sizeof(char) * m_nVertices) );
@@ -776,6 +837,15 @@ private:
           , *m_mgpuContext);
         SYNC_CHECK();
 
+        #ifdef VERTEXAPI_USE_MPI
+          //a vertex is active on every node if it is active on any node
+          copyToHost(m_activeFlagsHost, m_activeFlags, m_nVertices);
+          MPI_Barrier(MPI_COMM_WORLD);
+          MPI_Allreduce(MPI_IN_PLACE, m_activeFlagsHost, m_nVertices, MPI_CHAR
+            , MPI_LOR, MPI_COMM_WORLD);
+          copyToGPU(m_activeFlags, m_activeFlagsHost, m_nVertices);
+        #endif
+
         //convert m_activeFlags to new active compact list in m_active
         //set m_nActive to the number of active vertices
         scatter_if_inputloc_twophase(m_nVertices,
@@ -786,38 +856,40 @@ private:
         SYNC_CHECK();
         m_nActive = *m_hostMappedValue;
       }
-      else {
-        //we have a small number of edges, so just output into a list
-        //with atomics, sort and then extract unique values
-        CHECK( cudaMemset(m_edgeOutputCounter, 0, sizeof(int) ) );
+      #ifdef VERTEXAPI_USE_MPI
+        else {
+          //we have a small number of edges, so just output into a list
+          //with atomics, sort and then extract unique values
+          CHECK( cudaMemset(m_edgeOutputCounter, 0, sizeof(int) ) );
 
-        IntervalGather(nActiveEdges
-          , ActivateGatherIterator(m_dstOffsets, m_active)
-          , m_edgeCountScan
-          , m_nActive
-          , m_dsts
-          , ActivateOutputIteratorSmallSize(m_edgeOutputCounter, m_outputEdgeList)
-          , *m_mgpuContext);
-        SYNC_CHECK();
+          IntervalGather(nActiveEdges
+            , ActivateGatherIterator(m_dstOffsets, m_active)
+            , m_edgeCountScan
+            , m_nActive
+            , m_dsts
+            , ActivateOutputIteratorSmallSize(m_edgeOutputCounter, m_outputEdgeList)
+            , *m_mgpuContext);
+          SYNC_CHECK();
 
-        mgpu::MergesortKeys(m_outputEdgeList, nActiveEdges, mgpu::less<Int>(), *m_mgpuContext);
-        SYNC_CHECK();
+          mgpu::MergesortKeys(m_outputEdgeList, nActiveEdges, mgpu::less<Int>(), *m_mgpuContext);
+          SYNC_CHECK();
 
-        mgpu::Scan<mgpu::MgpuScanTypeExc, ListToHeadFlagsIterator, Int, mgpu::plus<Int>, ListOutputIterator>(
-            ListToHeadFlagsIterator(m_outputEdgeList)
-          , nActiveEdges
-          , 0
-          , mgpu::plus<Int>()
-          , m_deviceMappedValue
-          , (Int *)NULL
-          , ListOutputIterator(m_outputEdgeList, m_active)
-          , *m_mgpuContext);
+          mgpu::Scan<mgpu::MgpuScanTypeExc, ListToHeadFlagsIterator, Int, mgpu::plus<Int>, ListOutputIterator>(
+              ListToHeadFlagsIterator(m_outputEdgeList)
+            , nActiveEdges
+            , 0
+            , mgpu::plus<Int>()
+            , m_deviceMappedValue
+            , (Int *)NULL
+            , ListOutputIterator(m_outputEdgeList, m_active)
+            , *m_mgpuContext);
 
 
-        cudaDeviceSynchronize();
-        m_nActive = *m_hostMappedValue;
-        SYNC_CHECK();
-      }
+          cudaDeviceSynchronize();
+          m_nActive = *m_hostMappedValue;
+          SYNC_CHECK();
+        }
+      #endif //VERTEXAPI_USE_MPI
     }
 
 
@@ -836,7 +908,9 @@ private:
       while( countActive() )
       {
         gatherApply();
+        printf("finished gatherApply\n");
         scatterActivate();
+        printf("finished scatterActivate\n");
         nextIter();
       }
     }
