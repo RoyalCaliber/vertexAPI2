@@ -856,40 +856,40 @@ private:
         SYNC_CHECK();
         m_nActive = *m_hostMappedValue;
       }
-      #ifdef VERTEXAPI_USE_MPI
-        else {
-          //we have a small number of edges, so just output into a list
-          //with atomics, sort and then extract unique values
-          CHECK( cudaMemset(m_edgeOutputCounter, 0, sizeof(int) ) );
+      else if( nActiveEdges == 0 )
+        m_nActive = 0;
+      else {
+        //we have a small number of edges, so just output into a list
+        //with atomics, sort and then extract unique values
+        CHECK( cudaMemset(m_edgeOutputCounter, 0, sizeof(int) ) );
 
-          IntervalGather(nActiveEdges
-            , ActivateGatherIterator(m_dstOffsets, m_active)
-            , m_edgeCountScan
-            , m_nActive
-            , m_dsts
-            , ActivateOutputIteratorSmallSize(m_edgeOutputCounter, m_outputEdgeList)
-            , *m_mgpuContext);
-          SYNC_CHECK();
+        IntervalGather(nActiveEdges
+          , ActivateGatherIterator(m_dstOffsets, m_active)
+          , m_edgeCountScan
+          , m_nActive
+          , m_dsts
+          , ActivateOutputIteratorSmallSize(m_edgeOutputCounter, m_outputEdgeList)
+          , *m_mgpuContext);
+        SYNC_CHECK();
 
-          mgpu::MergesortKeys(m_outputEdgeList, nActiveEdges, mgpu::less<Int>(), *m_mgpuContext);
-          SYNC_CHECK();
+        mgpu::MergesortKeys(m_outputEdgeList, nActiveEdges, mgpu::less<Int>(), *m_mgpuContext);
+        SYNC_CHECK();
 
-          mgpu::Scan<mgpu::MgpuScanTypeExc, ListToHeadFlagsIterator, Int, mgpu::plus<Int>, ListOutputIterator>(
-              ListToHeadFlagsIterator(m_outputEdgeList)
-            , nActiveEdges
-            , 0
-            , mgpu::plus<Int>()
-            , m_deviceMappedValue
-            , (Int *)NULL
-            , ListOutputIterator(m_outputEdgeList, m_active)
-            , *m_mgpuContext);
+        mgpu::Scan<mgpu::MgpuScanTypeExc, ListToHeadFlagsIterator, Int, mgpu::plus<Int>, ListOutputIterator>(
+            ListToHeadFlagsIterator(m_outputEdgeList)
+          , nActiveEdges
+          , 0
+          , mgpu::plus<Int>()
+          , m_deviceMappedValue
+          , (Int *)NULL
+          , ListOutputIterator(m_outputEdgeList, m_active)
+          , *m_mgpuContext);
 
 
-          cudaDeviceSynchronize();
-          m_nActive = *m_hostMappedValue;
-          SYNC_CHECK();
-        }
-      #endif //VERTEXAPI_USE_MPI
+        cudaDeviceSynchronize();
+        m_nActive = *m_hostMappedValue;
+        SYNC_CHECK();
+      }
     }
 
 
@@ -908,9 +908,7 @@ private:
       while( countActive() )
       {
         gatherApply();
-        printf("finished gatherApply\n");
         scatterActivate();
-        printf("finished scatterActivate\n");
         nextIter();
       }
     }
