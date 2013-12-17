@@ -50,7 +50,6 @@ class GASEngineRef
 
   #ifdef VERTEXAPI_USE_MPI
     int          m_mpiRank;
-    Int          m_nTotalActive; //Total active vertices across all processes
     MPI_Datatype m_mpiGatherResultType;
     MPI_Op       m_mpiReduceOp;
   #endif
@@ -139,10 +138,6 @@ class GASEngineRef
       m_applyRet.resize(m_nVertices);
       m_activeFlags.resize(m_nVertices, false);
       m_gatherResults.resize(m_nVertices, Program::gatherZero);
-
-      #ifdef VERTEXAPI_USE_MPI
-        m_nTotalActive = 0;
-      #endif
     }
 
 
@@ -167,20 +162,13 @@ class GASEngineRef
       m_active.clear();
       for( Int i = vertexStart; i < vertexEnd; ++i )
         m_active.push_back(i);
-      #ifdef VERTEXAPI_USE_MPI
-        m_nTotalActive = m_active.size();
-      #endif
     }
 
 
     //Return the number of active vertices in the next gather step
     Int countActive()
     {
-      #ifdef VERTEXAPI_USE_MPI
-        return m_nTotalActive;
-      #else
-        return m_active.size();
-      #endif
+      return m_active.size();
     }
 
 
@@ -261,15 +249,6 @@ class GASEngineRef
         if( m_activeFlags[i] )
           m_active.push_back(i);
       }
-
-      #ifdef VERTEXAPI_USE_MPI
-        //find out how many total vertices are active
-        m_nTotalActive = m_active.size();
-        MPI_Barrier(MPI_COMM_WORLD);
-        //NOTE: The MPI_INT dataype is not correctly templatized!
-        MPI_Allreduce(MPI_IN_PLACE, &m_nTotalActive, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
-        printf("%d active=%zd totalActive=%d\n", m_mpiRank, m_active.size(), m_nTotalActive);
-      #endif
     }
 
 
