@@ -149,7 +149,7 @@ pgOpts   = '--ncpus 4'
 algorithms = ('connected_component', 'pagerank', 'sssp', 'bfs')
 graphs = ('ak2010', 'belgium_osm', 'delaunay_n13', 'coAuthorsDBLP', 'delaunay_n21', 'webbase-1M') #soc-LiveJournal1 #kron_g500-logn21
 #mpiN where N is the number of processors to use.
-methods = ('mpi2',) #('nompi', 'mpi2', 'mpi1')
+methods = ('nompi', 'mpi2', 'mpi1')
 
 
 #how to run powergraph to make a gold file
