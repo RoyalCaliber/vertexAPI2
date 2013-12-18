@@ -22,13 +22,13 @@ LIB_OBJECTS := $(LIB_SOURCES:%=%$(SUFFIX).o)
 LIB = libvertexAPI2$(SUFFIX).a
 
 #each source in this list should have a main()
-PROGRAM_SOURCES = outdeg createCCGraph pagerank sssp #bfs connected_components
+PROGRAM_SOURCES = outdeg createCCGraph pagerank sssp bfs #connected_components
 PROGRAM_OBJECTS = $(PROGRAM_SOURCES:%=%$(SUFFIX).o)
 PROGRAMS        = $(PROGRAM_SOURCES:%=%$(SUFFIX))
 ALL_SOURCES    := $(LIB_SOURCES) $(PROGRAM_SOURCES)
 
 DEPDIR = .deps
-DEPS   = $(ALL_SOURCES:%=.deps/%.dep)
+DEPS   = $(ALL_SOURCES:%=.deps/%$(SUFFIX).dep)
 
 all: $(PROGRAMS)
 
@@ -37,11 +37,11 @@ dep: $(DEPS)
 $(DEPDIR):
 	mkdir $(DEPDIR)
 
-$(DEPDIR)/%.dep: %.cu | $(DEPDIR)
-	$(MAKEDEP) $(INCLUDES) $< -o $@
+$(DEPDIR)/%$(SUFFIX).dep: %.cu | $(DEPDIR)
+	$(MAKEDEP) -MT $*$(SUFFIX).o $(INCLUDES) $< -o $@
 
-$(DEPDIR)/%.dep: %.cpp | $(DEPDIR)
-	$(MAKEDEP) $(INCLUDES) $< -o $@
+$(DEPDIR)/%$(SUFFIX).dep: %.cpp | $(DEPDIR)
+	$(MAKEDEP) -MT $*$(SUFFIX).o $(INCLUDES) $< -o $@
 
 -include $(DEPS)
 

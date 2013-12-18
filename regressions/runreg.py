@@ -20,6 +20,9 @@ def doNothing():
   pass
 
 
+#this method has a problem: bash reports the exit code of the last
+#command in a pipe by default, so even if the first part fails, we
+#do not detect it.  See set -o pipefail.  or change to subprocess
 def cmd(s):
   print(s)
   ret = os.system(s)
@@ -145,7 +148,7 @@ depGraph  = DepGraph()
 graphDir = '../test-graphs'
 pgBinDir = '../PowerGraphReferenceImplementations'
 pgOpts   = '--ncpus 4'
-algorithms = ('pagerank', 'sssp') #, 'bfs', 'connected_component')
+algorithms = ('bfs',) #('pagerank', 'sssp', 'bfs')#, 'connected_component')
 graphs = ('ak2010', 'belgium_osm', 'delaunay_n13', 'coAuthorsDBLP', 'delaunay_n21', 'webbase-1M') #soc-LiveJournal1 #kron_g500-logn21
 methods = ('nompi', 'mpi2',)# 'mpi1')
 
@@ -200,7 +203,7 @@ def testCmd(algo, mpirun, bin, mtx, deg, out, tm):
   elif algo == 'sssp':
     s = "{mpirun} {bin} -m {mtx} {deg} 0 __tmpout | awk '/Took/{{print $2}}' > {tm}"
   elif algo == 'bfs':
-    s = "{mpirun} {bin} -m {mtx} 0 __tmpout | awk '/Took/{{print $2}}' > {tm}"
+    s = "{mpirun} {bin} -m {mtx} {deg} 0 __tmpout | awk '/Took/{{print $2}}' > {tm}"
   elif algo == 'connected_component':
     s = "{mpirun} {bin} __tmpout | awk '/Took/{{print $2}}' > {tm}"
   else:
