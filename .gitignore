@@ -9,4 +9,15 @@ webbase-1M*
 bfs
 pagerank
 sssp
+connected_component
+bfs_mpi
+pagerank_mpi
+sssp_mpi
+connected_component_mpi
+outdeg
+outdeg_mpi
+createCCGraph
+createCCGraph_mpi
+libvertexAPI2.a
+libvertexAPI2_mpi.a
 *.x
