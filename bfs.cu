@@ -190,7 +190,7 @@ int main(int argc, char** argv)
     refVertexData = vertexData;
     run<GASEngineRef<BFS>, false>(nVertices, &refVertexData[0], (int)srcs.size()
       , &srcs[0], &dsts[0], sourceVertex);
-    if( dumpResults )
+    if( MASTER && dumpResults )
     {
       printf("Reference:\n");
       outputDepths(nVertices, &refVertexData[0]);

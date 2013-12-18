@@ -31,6 +31,7 @@ struct CC
   typedef int GatherResult;
   static const int gatherZero = INT_MAX;
 
+  enum { Commutative = true };
 
   __host__ __device__
   static int gatherReduce(const int& left, const int& right)
@@ -64,10 +65,13 @@ struct CC
 
 
 template<typename Engine>
-void run(int nVertices, CC::VertexData* vertexData, int nEdges
+int64_t run(int nVertices, CC::VertexData* vertexData, int nEdges
        , const int* srcs, const int* dsts)
 {
   Engine engine;
+  #ifdef VERTEXAPI_USE_MPI
+    engine.initMPI();
+  #endif
   engine.setGraph(nVertices, vertexData, nEdges, 0, srcs, dsts);
 
   //TODO, setting all vertices to active for first step works, but it would
@@ -77,7 +81,7 @@ void run(int nVertices, CC::VertexData* vertexData, int nEdges
   engine.run();
   engine.getResults();
   int64_t t1 = currentTime();
-  printf("Took %f ms\n", (t1 - t0)/1000.0f);
+  return t1 - t0;
 }
 
 
@@ -90,11 +94,27 @@ void outputLabels(int nVertices, int* labels, FILE* f = stdout)
 
 int main(int argc, char** argv)
 {
+  #ifdef VERTEXAPI_USE_MPI
+    int mpiRank = 0;
+    int mpiSize = 0; //number of mpi nodes
+
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &mpiRank);
+    MPI_Comm_size(MPI_COMM_WORLD, &mpiSize);
+  #endif
+
+  #ifdef VERTEXAPI_USE_MPI
+    #define MASTER (mpiRank == 0)
+  #else
+    #define MASTER (1)
+  #endif
+  
   char *inputFilename;
+  char *inputDegreeFilename;
   char *outputFilename = 0;
   bool runTest;
   bool dumpResults;
-  if( !parseCmdLineSimple(argc, argv, "s-t-d|s", &inputFilename
+  if( !parseCmdLineSimple(argc, argv, "ss-t-d|s", &inputFilename, &inputDegreeFilename
                         , &runTest, &dumpResults, &outputFilename) )
   {
     printf("Usage: cc [-t] [-d] inputfile source [outputfile]\n");
@@ -105,14 +125,26 @@ int main(int argc, char** argv)
   int nVertices;
   std::vector<int> srcs;
   std::vector<int> dsts;
-  loadGraph(inputFilename, nVertices, srcs, dsts);
+  #ifdef VERTEXAPI_USE_MPI
+    std::string tmp;
+    tmp = filenameSuffixMPI(inputFilename, mpiRank, mpiSize);
+    loadGraph(tmp.c_str(), nVertices, srcs, dsts);
+  #else
+    loadGraph(inputFilename, nVertices, srcs, dsts);
+  #endif  
   printf("loaded %s with %d vertices and %zd edges\n", inputFilename, nVertices, srcs.size());
+
+  //this has no purpose other than to figure out the number of vertices.
+  //we could pass it in from the command line, but this avoids any modification
+  //to the regression scripts.
+  std::vector<int> outDegrees;
+  loadData(inputDegreeFilename, outDegrees);
+  nVertices = outDegrees.size();
 
   //initialize vertex data
   std::vector<int> vertexData(nVertices);
   for (int i = 0; i < nVertices; ++i)
     vertexData[i] = i;
-
 
   std::vector<int> refVertexData;
   if( runTest )
@@ -121,22 +153,27 @@ int main(int argc, char** argv)
     refVertexData = vertexData;
     run< GASEngineRef<CC> >(nVertices, &refVertexData[0], (int)srcs.size()
                           , &srcs[0], &dsts[0]);
-    if( dumpResults )
+    if( MASTER && dumpResults )
     {
       printf("Reference:\n");
       outputLabels(nVertices, &refVertexData[0]);
     }  
   }
 
-  run< GASEngineGPU<CC> >(nVertices, &vertexData[0], (int)srcs.size()
-                          , &srcs[0], &dsts[0]);
-  if( dumpResults )
+  int64_t t = run< GASEngineGPU<CC> >(nVertices, &vertexData[0], (int)srcs.size()
+    , &srcs[0], &dsts[0]);
+
+  if( MASTER )
+    printf("Took %f ms\n", t/1000.0f);
+
+
+  if( MASTER && dumpResults )
   {
     printf("GPU:\n");
     outputLabels(nVertices, &vertexData[0]);
   }
 
-  if( runTest )
+  if( MASTER && runTest )
   {
     bool diff = false;
     for( int i = 0; i < nVertices; ++i )
@@ -153,7 +190,7 @@ int main(int argc, char** argv)
       printf("No differences found\n");
   }
 
-  if( outputFilename )
+  if( MASTER && outputFilename )
   {
     printf("writing results to %s\n", outputFilename);
     FILE* f = fopen(outputFilename, "w");
@@ -163,6 +200,10 @@ int main(int argc, char** argv)
 
   free(inputFilename);
   free(outputFilename);
+  
+  #ifdef VERTEXAPI_USE_MPI
+    MPI_Finalize();
+  #endif
 
   return 0;
 }

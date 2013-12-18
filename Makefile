@@ -22,7 +22,7 @@ LIB_OBJECTS := $(LIB_SOURCES:%=%$(SUFFIX).o)
 LIB = libvertexAPI2$(SUFFIX).a
 
 #each source in this list should have a main()
-PROGRAM_SOURCES = outdeg createCCGraph pagerank sssp bfs #connected_components
+PROGRAM_SOURCES = outdeg createCCGraph pagerank sssp bfs connected_component
 PROGRAM_OBJECTS = $(PROGRAM_SOURCES:%=%$(SUFFIX).o)
 PROGRAMS        = $(PROGRAM_SOURCES:%=%$(SUFFIX))
 ALL_SOURCES    := $(LIB_SOURCES) $(PROGRAM_SOURCES)

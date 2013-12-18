@@ -250,7 +250,11 @@ private:
       , m_hostMappedValue(0)
       , preComputed(false)
     {
-      m_mgpuContext = mgpu::CreateCudaDevice(0);
+      //This is moved to initMPI where we have our process rank
+      #ifndef VERTEXAPI_USE_MPI
+        m_mgpuContext = mgpu::CreateCudaDevice(0);
+        CHECK( cudaSetDevice(0) );
+      #endif
     }
 
 
@@ -308,6 +312,21 @@ private:
         MPI_Type_contiguous(sizeof(GatherResult), MPI_CHAR, &m_mpiGatherResultType);
         MPI_Type_commit(&m_mpiGatherResultType);
         MPI_Op_create((MPI_User_function*) mpiReduce, Program::Commutative, &m_mpiReduceOp);
+
+        //each process takes the next available cuda device wrapping
+        //around to the first.  You can control which devices are actually
+        //used in a given run using the CUDA_VISIBLE_DEVICES environment variable
+        //example: CUDA_VISIBLE_DEVICES=2,3 mpirun -np 2 bfs_mpi ...
+        int nDevices;
+        CHECK( cudaGetDeviceCount(&nDevices) );
+        if( nDevices == 0 )
+        {
+          printf("no cuda devices found\n");
+          abort();
+        }
+        int device = m_mpiRank % nDevices;
+        m_mgpuContext = mgpu::CreateCudaDevice(device);
+        CHECK( cudaSetDevice(device) ); //this is not needed since mgpu does it, but can't hurt.
       }
     #endif
 

@@ -169,7 +169,7 @@ int main(int argc, char** argv)
     refVertexData = vertexData;
     run< GASEngineRef<SSSP> >(nVertices, &refVertexData[0], (int)srcs.size()
       , &edgeData[0], &srcs[0], &dsts[0]);
-    if( dumpResults )
+    if( MASTER && dumpResults )
     {
       printf("Reference:\n");
       outputDists(nVertices, &refVertexData[0]);

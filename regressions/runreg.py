@@ -20,12 +20,10 @@ def doNothing():
   pass
 
 
-#this method has a problem: bash reports the exit code of the last
-#command in a pipe by default, so even if the first part fails, we
-#do not detect it.  See set -o pipefail.  or change to subprocess
+#if your shell is not bash, remove the 'set -o pipefail; '
 def cmd(s):
   print(s)
-  ret = os.system(s)
+  ret = os.system('set -o pipefail; ' + s)
   if ret > 0:
     print('error executing command')
     raise MakeFailure
@@ -148,9 +146,10 @@ depGraph  = DepGraph()
 graphDir = '../test-graphs'
 pgBinDir = '../PowerGraphReferenceImplementations'
 pgOpts   = '--ncpus 4'
-algorithms = ('bfs',) #('pagerank', 'sssp', 'bfs')#, 'connected_component')
+algorithms = ('connected_component', 'pagerank', 'sssp', 'bfs')
 graphs = ('ak2010', 'belgium_osm', 'delaunay_n13', 'coAuthorsDBLP', 'delaunay_n21', 'webbase-1M') #soc-LiveJournal1 #kron_g500-logn21
-methods = ('nompi', 'mpi2',)# 'mpi1')
+#mpiN where N is the number of processors to use.
+methods = ('mpi2',) #('nompi', 'mpi2', 'mpi1')
 
 
 #how to run powergraph to make a gold file
@@ -183,7 +182,7 @@ for graph in graphs:
 
   for method in methods:
     if method.startswith('mpi'):
-      ncpus = int(method[-1])
+      ncpus = int(method[3:])
       parts = ['{}.part.mtx_{}_{}'.format(graph, ncpus, icpu) for icpu in range(ncpus)]
       for part in parts:
         s = '%s/partition.py %s %s %s.part.mtx_%s_' % (graphDir, mtx, ncpus, graph, ncpus)
@@ -205,7 +204,7 @@ def testCmd(algo, mpirun, bin, mtx, deg, out, tm):
   elif algo == 'bfs':
     s = "{mpirun} {bin} -m {mtx} {deg} 0 __tmpout | awk '/Took/{{print $2}}' > {tm}"
   elif algo == 'connected_component':
-    s = "{mpirun} {bin} __tmpout | awk '/Took/{{print $2}}' > {tm}"
+    s = "{mpirun} {bin} {mtx} {deg} __tmpout | awk '/Took/{{print $2}}' > {tm}"
   else:
     raise Exception('write the command line for algo %s' % algo)
   s = s.format(mpirun=mpirun, bin=bin, mtx=mtx, deg=deg, tm=tm)
@@ -227,7 +226,7 @@ for graph, algo, method in cartprod(graphs, algorithms, methods):
   deg = '{}.deg'.format(graph)
   tm  = '{}.{}.{}.timing_gpu'.format(graph, algo, method)
   if method.startswith('mpi'):
-    ncpus = method[-1]
+    ncpus = method[3:]
     mpirun = 'mpirun -np {}'.format(ncpus)
     mtx = '{}.part.mtx'.format(graph)
     bin = '../{}_mpi'.format(algo)
