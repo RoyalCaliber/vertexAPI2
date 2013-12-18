@@ -32,6 +32,8 @@ struct SSSP
   static const int maxLength = 100000;
   static const int gatherZero = INT_MAX - maxLength;
 
+  enum {Commutative = true};
+
 
   __host__ __device__
   static int gatherReduce(const int& left, const int& right)
@@ -65,10 +67,13 @@ struct SSSP
 
 
 template<typename Engine>
-void run(int nVertices, SSSP::VertexData* vertexData, int nEdges
+int64_t run(int nVertices, SSSP::VertexData* vertexData, int nEdges
   , SSSP::EdgeData* edgeData, const int* srcs, const int* dsts)
 {
   Engine engine;
+  #ifdef VERTEXAPI_USE_MPI
+    engine.initMPI();
+  #endif
   engine.setGraph(nVertices, vertexData, nEdges, edgeData, srcs, dsts);
 
   //TODO, setting all vertices to active for first step works, but it would
@@ -78,7 +83,7 @@ void run(int nVertices, SSSP::VertexData* vertexData, int nEdges
   engine.run();
   engine.getResults();
   int64_t t1 = currentTime();
-  printf("Took %f ms\n", (t1 - t0)/1000.0f);
+  return t1 - t0;
 }
 
 
@@ -91,16 +96,32 @@ void outputDists(int nVertices, int* dists, FILE* f = stdout)
 
 int main(int argc, char** argv)
 {
+  #ifdef VERTEXAPI_USE_MPI
+    int mpiRank = 0;
+    int mpiSize = 0; //number of mpi nodes
+
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &mpiRank);
+    MPI_Comm_size(MPI_COMM_WORLD, &mpiSize);
+  #endif
+
+  #ifdef VERTEXAPI_USE_MPI
+    #define MASTER (mpiRank == 0)
+  #else
+    #define MASTER (1)
+  #endif
+  
   char *inputFilename;
   char *outputFilename = 0;
+  char *inputDegreeFilename;
   int sourceVertex;
   bool runTest;
   bool dumpResults;
   bool useMaxOutDegreeStart;
-  if( !parseCmdLineSimple(argc, argv, "si-t-d-m|s", &inputFilename, &sourceVertex
-    , &runTest, &dumpResults, &useMaxOutDegreeStart, &outputFilename) )
+  if( !parseCmdLineSimple(argc, argv, "ssi-t-d-m|s", &inputFilename, &inputDegreeFilename
+    , &sourceVertex, &runTest, &dumpResults, &useMaxOutDegreeStart, &outputFilename) )
   {
-    printf("Usage: sssp [-t] [-d] [-m] inputfile source [outputfile]\n");
+    printf("Usage: sssp [-t] [-d] [-m] inputfile inputDegrees source [outputfile]\n");
     exit(1);
   }
 
@@ -109,30 +130,28 @@ int main(int argc, char** argv)
   std::vector<int> srcs;
   std::vector<int> dsts;
   std::vector<int> edgeData;
-  loadGraph(inputFilename, nVertices, srcs, dsts, &edgeData);
+  #ifdef VERTEXAPI_USE_MPI
+    std::string tmp;
+    tmp = filenameSuffixMPI(inputFilename, mpiRank, mpiSize);
+    loadGraph(tmp.c_str(), nVertices, srcs, dsts, &edgeData);
+  #else
+    loadGraph(inputFilename, nVertices, srcs, dsts, &edgeData);
+  #endif
   if( edgeData.size() == 0 )
   {
     printf("No edge data available in input file\n");
     exit(1);
   }
 
+  //read in out degrees from file.  This is the correct number of vertices
+  std::vector<int> outDegrees;
+  loadData(inputDegreeFilename, outDegrees);
+  nVertices = outDegrees.size();
+
   if( useMaxOutDegreeStart )
   {
-    //convert to CSR layout to find source vertex
-    std::vector<int> srcOffsets(nVertices + 1);
-    std::vector<int> csrSrcs(srcs.size());
-    edgeListToCSR<int>(nVertices, srcs.size(), &srcs[0], &dsts[0], &srcOffsets[0], 0, 0);
-    int maxDegree = -1;
-    sourceVertex = -1;
-    for(int i = 0; i < nVertices; ++i)
-    {
-      int outDegree = srcOffsets[i + 1] - srcOffsets[i];
-      if( outDegree > maxDegree )
-      {
-        maxDegree    = outDegree;
-        sourceVertex = i;
-      }
-    }
+    sourceVertex = std::max_element(outDegrees.begin(), outDegrees.end()) - outDegrees.begin();
+    int maxDegree = outDegrees[sourceVertex];
     printf("using vertex %d with degree %d as source\n", sourceVertex, maxDegree);
   }
   
@@ -157,15 +176,18 @@ int main(int argc, char** argv)
     }  
   }
 
-  run< GASEngineGPU<SSSP> >(nVertices, &vertexData[0], (int)srcs.size()
+  int64_t t = run< GASEngineGPU<SSSP> >(nVertices, &vertexData[0], (int)srcs.size()
     , &edgeData[0], &srcs[0], &dsts[0]);
-  if( dumpResults )
+  if( MASTER )
+    printf("Took %f ms\n", t / 1000.0f);
+    
+  if( MASTER && dumpResults )
   {
     printf("GPU:\n");
     outputDists(nVertices, &vertexData[0]);
   }
 
-  if( runTest )
+  if( MASTER && runTest )
   {
     bool diff = false;
     for( int i = 0; i < nVertices; ++i )
@@ -182,7 +204,7 @@ int main(int argc, char** argv)
       printf("No differences found\n");
   }
 
-  if( outputFilename )
+  if( MASTER && outputFilename )
   {
     printf("writing results to %s\n", outputFilename);
     FILE* f = fopen(outputFilename, "w");
@@ -192,6 +214,10 @@ int main(int argc, char** argv)
 
   free(inputFilename);
   free(outputFilename);
+
+  #ifdef VERTEXAPI_USE_MPI
+    MPI_Finalize();
+  #endif
 
   return 0;
 }
