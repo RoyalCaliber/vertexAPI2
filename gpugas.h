@@ -240,7 +240,7 @@ private:
       , m_outputEdgeList(0)
       , preComputed(false)
     {
-      m_mgpuContext = mgpu::CreateCudaDevice(1);
+      m_mgpuContext = mgpu::CreateCudaDevice(0);
     }
 
 

@@ -20,6 +20,8 @@ limitations under the License.
 #include <vector>
 #include <stdio.h>
 
+#include "util.h"
+
 //Reference implementation, useful for correctness checking
 //and prototyping interfaces.
 //This is not an optimized CPU implementation.

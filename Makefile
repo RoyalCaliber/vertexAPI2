@@ -1,5 +1,5 @@
 NVCC = nvcc
-MGPU_PATH = ../moderngpu2
+MGPU_PATH = ../moderngpu
 #NVCC_OPTS = -O3 --restrict -Xptxas -dlcm=cg -I$(MGPU_PATH)/include -L$(MGPU_PATH)
 NVCC_OPTS = -O3 -Xptxas -abi=no -I$(MGPU_PATH)/include -L$(MGPU_PATH)
 NVCC_ARCHS = -gencode arch=compute_20,code=sm_20 -gencode arch=compute_30,code=sm_30
