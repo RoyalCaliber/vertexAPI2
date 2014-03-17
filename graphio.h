@@ -37,11 +37,25 @@ int loadGraph_MatrixMarket( const char* fname
   , std::vector<int> *edgeValues );
 
 
+//Read in a binary CSR graph (Lonestar format)
+//If expand is true, converts CSR into list of edges
+//to be compatible with the other loaders, otherwise
+//the argument srcs will contain nVertices + 1 offsets
+int loadGraph_binaryCSR(const char* fname
+  , int &nVertices
+  , std::vector<int> &srcs
+  , std::vector<int> &dsts
+  , std::vector<int> *edgeValues
+  , bool expand = true);
+
+
 //Detects the filetype from the extension
 int loadGraph( const char* fname
   , int &nVertices
   , std::vector<int> &srcs
   , std::vector<int> &dsts
   , std::vector<int> *edgeValues = 0);
+
+
 
 #endif
