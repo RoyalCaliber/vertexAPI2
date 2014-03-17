@@ -347,6 +347,53 @@ int loadGraph_binaryCSR(const char* fname
 }
 
 
+int writeGraph_binaryCSR(const char* fname
+  , int nVertices, int nEdges, const int *offsets, const int* dsts
+  , const int *edgeValues)
+{
+  FILE *f = fopen(fname, "w");
+  
+  uint64_t u64;
+
+  //version
+  u64 = 1; 
+  fwrite(&u64, 8, 1, f); 
+
+  //sizeEdgeType
+  u64 = edgeValues ? 4 : 0;
+  fwrite(&u64, 8, 1, f);
+
+  //nVertices
+  u64 = nVertices;
+  fwrite(&u64, 8, 1, f);
+
+  //nEdges
+  u64 = nEdges;
+  fwrite(&u64, 8, 1, f);
+
+  //write offsets, without first zero
+  std::vector<uint64_t> tmp(nVertices);
+  for (int i = 0; i < nVertices; ++i)
+    tmp[i] = offsets[i + 1];
+  fwrite(&tmp[0], 8, nVertices, f);
+
+  //write dsts, add padding
+  fwrite(dsts, 4, nEdges, f);
+  if (nEdges % 2)
+  {
+    uint32_t pad = 0;
+    fwrite(&pad, 4, 1, f);
+  }
+
+  //write edge values if present
+  if (edgeValues)
+    fwrite(edgeValues, 4, nEdges, f);
+  
+  fclose(f);
+} 
+
+
+
 int loadGraph( const char* fname
   , int &nVertices
   , std::vector<int> &srcs

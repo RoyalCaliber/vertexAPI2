@@ -57,5 +57,9 @@ int loadGraph( const char* fname
   , std::vector<int> *edgeValues = 0);
 
 
+//write out a lonestar format binary csr file
+int writeGraph_binaryCSR(const char* fname
+  , int nVertices, int nEdges, const int *offsets, const int* dsts
+  , const int *edgeValues);
 
 #endif
