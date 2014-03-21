@@ -273,6 +273,11 @@ int loadGraph_binaryCSR(const char* fname
     } \
   
   FILE* f = fopen(fname, "r");
+  if (!f)
+  {
+    cerr << "unable to open file " << fname << endl;
+    exit(1);
+  }
   
   uint64_t version;
   CHK_FREAD(&version, 8, 1, f);
@@ -352,6 +357,11 @@ int writeGraph_binaryCSR(const char* fname
   , const int *edgeValues)
 {
   FILE *f = fopen(fname, "w");
+  if (!f)
+  {
+    cerr << "unable to write to file " << fname << endl;
+    exit(1);
+  }
   
   uint64_t u64;
 

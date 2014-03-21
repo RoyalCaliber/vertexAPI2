@@ -62,6 +62,7 @@ Implementation Notes(VV):
 #include "moderngpu.cuh"
 #include "primitives/scatter_if_mgpu.h"
 #include "util.h"
+#include "cuda_util.h"
 
 //using this because CUB device-wide reduce_by_key does not yet work
 //and I am still working on a fused gatherMap/gatherReduce kernel.
@@ -136,81 +137,8 @@ private:
   //MGPU context
   mgpu::ContextPtr m_mgpuContext;
 
-  //convenience
-  void errorCheck(cudaError_t err, const char* file, int line)
-  {
-    if( err != cudaSuccess )
-    {
-      printf("%s(%d): cuda error %d (%s)\n", file, line, err, cudaGetErrorString(err));
-      abort();
-    }
-  }
-
-  //use only for debugging kernels
-  //this slows stuff down a LOT
-  void syncAndErrorCheck(const char* file, int line)
-  {
-    cudaThreadSynchronize();
-    errorCheck(cudaGetLastError(), file, line);
-  }
-
-  //this is undefined at the end of this template definition
-  #define CHECK(X) errorCheck(X, __FILE__, __LINE__)
-  #define SYNC_CHECK() syncAndErrorCheck(__FILE__, __LINE__)
-
-  template<typename T>
-  void gpuAlloc(T* &p, Int n)
-  {
-    CHECK( cudaMalloc(&p, sizeof(T) * n) );
-  }
-
-  template<typename T>
-  void copyToGPU(T* dst, const T* src, Int n)
-  {
-    CHECK( cudaMemcpy(dst, src, sizeof(T) * n, cudaMemcpyHostToDevice) );
-  }
-
-  template<typename T>
-  void copyToHost(T* dst, const T* src, Int n)
-  {
-    //error check please!
-    CHECK( cudaMemcpy(dst, src, sizeof(T) * n, cudaMemcpyDeviceToHost) );
-  }
-
-  void gpuFree(void *ptr)
-  {
-    if( ptr )
-      CHECK( cudaFree(ptr) );
-  }
-
-
-  dim3 calcGridDim(Int n)
-  {
-    if (n < 65536)
-      return dim3(n, 1, 1);
-    else {
-      int side1 = static_cast<int>(sqrt((double)n));
-      int side2 = static_cast<int>(ceil((double)n / side1));
-      return dim3(side2, side1, 1);
-    }
-  }
-
-
-  Int divRoundUp(Int x, Int y)
-  {
-    return (x + y - 1) / y;
-  }
-
-
-  //for debugging
-  template<typename T>
-  void printGPUArray(T* ptr, int n)
-  {
-    std::vector<T> tmp(n);
-    copyToHost(&tmp[0], ptr, n);
-    for( Int i = 0; i < n; ++i )
-      std::cout << i << " " << tmp[i] << std::endl;
-  }
+  //profiling
+  cudaEvent_t m_ev0, m_ev1;
 
   public:
     GASEngineGPU()
@@ -388,6 +316,9 @@ private:
       else {
         gpuAlloc(m_outputEdgeList, m_nEdges / 100 + 1);
       }
+
+      cudaEventCreate(&m_ev0);
+      cudaEventCreate(&m_ev1);
     }
 
 
@@ -761,6 +692,7 @@ private:
         //dst vertex into m_activeFlags
         CHECK( cudaMemset(m_activeFlags, 0, sizeof(char) * m_nVertices) );
 
+        //CHECK( cudaEventRecord(m_ev0) );
         IntervalGather(nActiveEdges
           , ActivateGatherIterator(m_dstOffsets, m_active)
           , m_edgeCountScan
@@ -768,6 +700,10 @@ private:
           , m_dsts
           , ActivateOutputIterator(m_activeFlags)
           , *m_mgpuContext);
+        //CHECK( cudaEventRecord(m_ev1) ) ;
+        float elapsedTime;
+        //CHECK( cudaEventElapsedTime(&elapsedTime, m_ev0, m_ev1) );
+        //printf("m_nActive = %d\n, expand took %f ms\n", m_nActive, elapsedTime);
         SYNC_CHECK();
 
         //convert m_activeFlags to new active compact list in m_active
@@ -834,10 +770,6 @@ private:
         nextIter();
       }
     }
-
-    //remove macro clutter
-    #undef CHECK
-    #undef SYNC_CHECK
 };
 
 
