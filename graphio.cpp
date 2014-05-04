@@ -403,6 +403,30 @@ int writeGraph_binaryCSR(const char* fname
 } 
 
 
+int writeGraph_mtx(const char* fname, int nVertices, int nEdges
+  , const int *srcs, const int *dsts, const int* edgeValues)
+{
+  FILE *f = fopen(fname, "w");
+  if (!f)
+  {
+    cerr << "unable to write to file " << fname << endl;
+    exit(1);
+  }
+  fprintf(f, "%%MatrixMarket matrix coordinate Integer general\n");
+  fprintf(f, "%d %d %d\n", nVertices, nVertices, nEdges);
+  if (edgeValues)
+  {
+    for (int i = 0; i < nEdges; ++i)
+      fprintf(f, "%d %d %d\n", srcs[i]+1, dsts[i]+1, edgeValues[i]);
+  }
+  else
+  {
+    for (int i = 0; i < nEdges; ++i)
+      fprintf(f, "%d %d\n", srcs[i]+1, dsts[i]+1);
+  }
+  fclose(f);
+}
+
 
 int loadGraph( const char* fname
   , int &nVertices

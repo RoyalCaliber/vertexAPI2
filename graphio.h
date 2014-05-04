@@ -61,5 +61,8 @@ int loadGraph( const char* fname
 int writeGraph_binaryCSR(const char* fname
   , int nVertices, int nEdges, const int *offsets, const int* dsts
   , const int *edgeValues);
+  
+int writeGraph_mtx(const char* fname, int nVertices, int nEdges
+  , const int *srcs, const int *dsts, const int* edgeValues);
 
 #endif
