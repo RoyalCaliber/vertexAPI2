@@ -1,5 +1,15 @@
 /******************************************************************************
-Copyright 2013 Royal Caliber LLC. (http://www.royal-caliber.com)
+Copyright 2013 SYSTAP, LLC. http://www.systap.com
+
+Written by Erich Elsen and Vishal Vaidyanathan
+of Royal Caliber, LLC
+Contact us at: info@royal-caliber.com
+
+This file was taken from mpgraph v0.1 which was (partially) funded by the
+DARPA XDATA program under AFRL Contract #FA8750-13-C-0002.  The file has
+been modified by Royal Caliber, LLC.
+
+Copyright 2013, 2014 Royal Caliber LLC. (http://www.royal-caliber.com)
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
